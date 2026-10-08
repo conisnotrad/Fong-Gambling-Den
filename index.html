@@ -155,7 +155,7 @@ input[type=number]{width:80px}
 .fields label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600}
 
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--surface);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
-.tabs-in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr);gap:2px}
+.tabs-in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:2px}
 .tabs button{border:0;background:transparent;border-radius:10px;padding:6px 2px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11.5px;font-weight:600;color:var(--muted)}
 .tabs button .ic{font:17px/1 var(--display);width:30px;height:26px;display:grid;place-items:center;border-radius:7px}
 .tabs button.on{color:var(--jade)}
@@ -288,7 +288,7 @@ function snakeSeat(rankedIds, nTables) {
 // ---------- state ----------
 const S = { ready: false, user: null, isAdmin: false, players: {}, tables: {}, nights: {}, settings: { ruleset: "uts10", selfDraw: "half" }, tournaments: {} };
 const ui = { tab: "record", tableId: lsGet("fgd-table"), winner: null, from: null, fan: null, scope: "today", date: null, histOpen: {}, histLimit: 15, confirm: null, tView: null, newT: false, d: {} };
-const validTabs = ["record", "tables", "scores", "history", "thistory", "tourney", "settings"];
+const validTabs = ["record", "tables", "scores", "hands", "history", "thistory", "tourney", "settings"];
 if (validTabs.includes(location.hash.slice(1))) ui.tab = location.hash.slice(1);
 
 const pname = id => S.players[id]?.name || "Unknown player";
@@ -441,8 +441,8 @@ function statusPill() {
   return `<span id="status" class="pill">${S.user ? "Live" : "Connecting…"}</span>`;
 }
 function renderTabs() {
-  const tabs = [["record", "胡", "Record"], ["tables", "桌", "Tables"], ["scores", "分", "Scores"], ["tourney", "賽", "Tourney"], ["settings", "設", "More"]];
-  const cur = ui.tab === "history" || ui.tab === "thistory" ? "scores" : ui.tab;
+  const tabs = [["record", "胡", "Record"], ["tables", "桌", "Tables"], ["scores", "分", "Scores"], ["hands", "牌", "Hands"], ["tourney", "賽", "Tourney"], ["settings", "設", "More"]];
+  const cur = ui.tab === "thistory" ? "scores" : ui.tab === "history" ? "hands" : ui.tab;
   document.getElementById("tabs").innerHTML = tabs.map(([k, ic, l]) =>
     `<button class="${cur === k ? "on" : ""}" data-act="tab" data-tab="${k}" ${cur === k ? 'aria-current="page"' : ""}><span class="ic" aria-hidden="true">${ic}</span>${l}</button>`).join("");
 }
@@ -556,7 +556,7 @@ VIEWS.scores = () => {
   const list = rankList(statsFor(sel, S.settings)).filter(s => s.played > 0);
   h += `<section class="card"><div class="row between"><h2>${title}</h2><span class="muted small num">${sel.length} hand${sel.length === 1 ? "" : "s"}</span></div>`;
   h += list.length ? boardRows(list, { nights: ui.scope === "all" }) : `<p class="muted">No hands recorded ${ui.scope === "today" ? "today yet" : "here"}.</p>`;
-  h += rulesNote() + `</section><button class="btn ghost" data-act="tab" data-tab="history">Hand history</button></div>`;
+  h += rulesNote() + `</section></div>`;
   return h;
 };
 
@@ -572,14 +572,16 @@ function tourneyHistory() {
   for (const T of all) {
     const open = ui.tOpen?.[T.id] ?? false;
     const handCount = tHands(T).length;
-    const summary = T.stage === "done" ? `Champion: <b>${esc(pname(T.champion))}</b>` : `<span class="badge">Live</span> ${stageLabel(T)}`;
+    const summary = T.stage === "done" ? `<span class="badge">Finished</span> Champion: <b>${esc(pname(T.champion))}</b>`
+      : T.paused ? `<span class="badge warn">Paused</span> ${stageLabel(T).replace("Paused · ", "")}` : `<span class="badge">Live</span> ${stageLabel(T)}`;
     h += `<div class="night"><button data-act="toggleT" data-t="${T.id}" aria-expanded="${open}"><span><h2>${esc(T.name)}</h2><span class="muted small">${niceDate(T.date)} · ${(T.playerIds || []).length} players · ${handCount} hand${handCount === 1 ? "" : "s"}</span><div class="small">${summary}</div></span><span aria-hidden="true">${open ? "▾" : "▸"}</span></button>`;
     if (open) {
       h += `<div class="body stack">`;
       if (T.stage === "final" || T.stage === "done") h += `<div><h3>Final table</h3>${boardRows(tStandings(T, "final"), { tie: true })}</div>`;
       h += `<div><h3>Qualifying (${T.qualRounds} round${T.qualRounds === 1 ? "" : "s"} of ${T.handsPerRound} hands)</h3>${boardRows(tStandings(T, "qual"), { tie: true, cut: 4 })}</div>`;
       if (S.isAdmin && T.stage !== "done") h += tournamentAdmin(T);
-      h += `<button class="btn link" data-act="viewT" data-t="${T.id}">Open in Tourney tab</button></div>`;
+      if (T.stage !== "done" && !T.paused) h += `<button class="btn link" data-act="viewT" data-t="${T.id}">Open in Tourney tab</button>`;
+      h += `</div>`;
     }
     h += `</div>`;
   }
@@ -587,40 +589,50 @@ function tourneyHistory() {
 }
 VIEWS.thistory = () => { ui.tab = "scores"; ui.scope = "tourney"; return VIEWS.scores(); };
 
-VIEWS.history = () => {
+function nightBlock(d, open, title) {
+  const hs = [...S.nights[d].hands].sort((a, b) => b.ts - a.ts);
+  const tn = [...new Set(hs.filter(x => x.tournamentId).map(x => S.tournaments[x.tournamentId]?.name).filter(Boolean))];
+  let h = `<div class="night"><button data-act="toggleNight" data-d="${d}" aria-expanded="${open}"><span><h2>${title || niceDate(d)}</h2><span class="muted small">${hs.length} hand${hs.length === 1 ? "" : "s"}${tn.length ? " · " + esc(tn.join(", ")) : ""}</span></span><span aria-hidden="true">${open ? "▾" : "▸"}</span></button>`;
+  if (open) h += `<div class="body"><ul class="hands">${hs.map(x => {
+    const dl = handDeltas(x, S.settings);
+    const T = x.tournamentId && S.tournaments[x.tournamentId];
+    return `<li><span class="t">${timeOf(x.ts)}</span><span class="d">${handLine(x)}<div class="sub">${esc(x.tableName || "")}${T ? ` · ${esc(T.name)} ${x.stage === "final" ? "final" : ""} R${x.round}` : ""}</div>${S.isAdmin ? `<div class="row"><button class="btn link" data-act="editHand" data-d="${d}" data-id="${x.id}">Edit</button>${confirmBtn("del:" + x.id, "Delete", "Tap again to delete", "deleteHand", `data-d="${d}" data-id="${x.id}"`, "btn link")}</div>` : ""}</span><span class="v ${cls(dl[x.winner] || 0)}">${x.draw ? "—" : fmt(dl[x.winner] || 0)}</span></li>`;
+  }).join("")}</ul></div>`;
+  return h + `</div>`;
+}
+// Hands tab: tonight's hands first (always open), then every earlier night
+VIEWS.hands = () => {
+  const today = sydDate(Date.now());
   const dates = Object.keys(S.nights).filter(d => S.nights[d].hands?.length).sort().reverse();
-  let h = `<div class="stack"><div class="row between"><h2>Hand history</h2><button class="btn link" data-act="tab" data-tab="scores">Back to scores</button></div>`;
-  if (!dates.length) return h + `<p class="muted">No hands recorded yet.</p></div>`;
-  if (!S.isAdmin) h += `<p class="muted small">Spotted a mistake? Only the admin can edit or delete hands.</p>`;
-  for (const d of dates.slice(0, ui.histLimit)) {
-    const hs = [...S.nights[d].hands].sort((a, b) => b.ts - a.ts);
-    const open = ui.histOpen[d] ?? d === dates[0];
-    const tn = [...new Set(hs.filter(x => x.tournamentId).map(x => S.tournaments[x.tournamentId]?.name).filter(Boolean))];
-    h += `<div class="night"><button data-act="toggleNight" data-d="${d}" aria-expanded="${open}"><span><h2>${niceDate(d)}</h2><span class="muted small">${hs.length} hand${hs.length === 1 ? "" : "s"}${tn.length ? " · " + esc(tn.join(", ")) : ""}</span></span><span aria-hidden="true">${open ? "▾" : "▸"}</span></button>`;
-    if (open) h += `<div class="body"><ul class="hands">${hs.map(x => {
-      const dl = handDeltas(x, S.settings);
-      const T = x.tournamentId && S.tournaments[x.tournamentId];
-      return `<li><span class="t">${timeOf(x.ts)}</span><span class="d">${handLine(x)}<div class="sub">${esc(x.tableName || "")}${T ? ` · ${esc(T.name)} ${x.stage === "final" ? "final" : ""} R${x.round}` : ""}</div>${S.isAdmin ? `<div class="row"><button class="btn link" data-act="editHand" data-d="${d}" data-id="${x.id}">Edit</button>${confirmBtn("del:" + x.id, "Delete", "Tap again to delete", "deleteHand", `data-d="${d}" data-id="${x.id}"`, "btn link")}</div>` : ""}</span><span class="v ${cls(dl[x.winner] || 0)}">${x.draw ? "—" : fmt(dl[x.winner] || 0)}</span></li>`;
-    }).join("")}</ul></div>`;
-    h += `</div>`;
-  }
-  if (dates.length > ui.histLimit) h += `<button class="btn ghost" data-act="moreHist">Show older nights</button>`;
+  let h = `<div class="stack">`;
+  h += dates.includes(today)
+    ? nightBlock(today, ui.histOpen[today] ?? true, "Tonight · " + niceDate(today))
+    : `<section class="card empty"><h2>Tonight · ${niceDate(today)}</h2><p class="muted">No hands recorded yet tonight.</p></section>`;
+  if (!S.isAdmin && dates.length) h += `<p class="muted small">Spotted a mistake? Only the admin can edit or delete hands.</p>`;
+  const older = dates.filter(d => d !== today);
+  h += `<h3>Hand history</h3>`;
+  if (!older.length) h += `<p class="muted">Earlier game nights will show up here.</p>`;
+  for (const d of older.slice(0, ui.histLimit)) h += nightBlock(d, ui.histOpen[d] ?? false);
+  if (older.length > ui.histLimit) h += `<button class="btn ghost" data-act="moreHist">Show older nights</button>`;
   return h + `</div>`;
 };
+VIEWS.history = () => { ui.tab = "hands"; return VIEWS.hands(); };
 
 VIEWS.tourney = () => {
-  const all = Object.values(S.tournaments).sort((a, b) => b.createdAt - a.createdAt);
-  const act = activeTournaments();
-  let T = (ui.tView && S.tournaments[ui.tView]) || act[0] || null;
+  // Only running tournaments live here; paused and finished ones are under Scores > Tourneys
+  const running = activeTournaments().filter(x => !x.paused);
+  const T = (ui.tView && running.find(x => x.id === ui.tView)) || running[0] || null;
   let h = `<div class="stack">`;
   if (S.isAdmin && (ui.newT || !T)) h += newTournamentForm();
   else if (S.isAdmin) h += `<button class="btn ghost" data-act="newT">Start a new tournament</button>`;
   if (!T) {
     if (!S.isAdmin) h += `<section class="card empty"><h2>No tournament running</h2><p class="muted">When the admin starts one, live tables and the leaderboard show up here.</p></section>`;
   } else h += tournamentView(T);
-  const others = all.filter(x => x !== T);
-  if (others.length) h += `<section class="card"><h3>Other tournaments</h3><ul class="hands">${others.map(x =>
-    `<li><span class="d"><button class="btn link" data-act="viewT" data-t="${x.id}">${esc(x.name)}</button><div class="sub">${niceDate(x.date)} · ${x.stage === "done" ? "Champion: " + esc(pname(x.champion)) : stageLabel(x)}</div></span></li>`).join("")}</ul></section>`;
+  const others = running.filter(x => x !== T);
+  if (others.length) h += `<section class="card"><h3>Also running</h3><ul class="hands">${others.map(x =>
+    `<li><span class="d"><button class="btn link" data-act="viewT" data-t="${x.id}">${esc(x.name)}</button><div class="sub">${niceDate(x.date)} · ${stageLabel(x)}</div></span></li>`).join("")}</ul></section>`;
+  const nPaused = Object.values(S.tournaments).filter(x => x.paused && x.stage !== "done").length;
+  h += `<p class="muted small">Finished${nPaused ? ` and paused (${nPaused})` : ""} tournaments are under Scores → Tourneys. <button class="btn link" data-act="goTourneys">Go there</button></p>`;
   return h + `</div>`;
 };
 function newTournamentForm() {
@@ -796,7 +808,7 @@ const A = {
   async unseat(d) { const t = S.tables[d.t]; await run(store.updateTable(t.id, { seats: t.seats.filter(p => p !== d.id) })); },
   async closeTable(d) { if (!S.isAdmin) return toast("Only the admin can close tables.", true); await run(store.updateTable(d.t, { open: false }), "Table closed"); },
   scope(d) { ui.scope = d.scope; },
-  toggleNight(d) { const dates = Object.keys(S.nights).filter(k => S.nights[k].hands?.length).sort().reverse(); ui.histOpen[d.d] = !(ui.histOpen[d.d] ?? d.d === dates[0]); },
+  toggleNight(d) { ui.histOpen[d.d] = !(ui.histOpen[d.d] ?? d.d === sydDate(Date.now())); },
   moreHist() { ui.histLimit += 15; },
   editHand(d) { openEdit(d.d, d.id); return "keep"; },
   closeModal(d, el, ev) { if (ev && el.dataset.act === "closeModal" && ev.target.closest("[data-stop]") && !ev.target.closest(".btn")) return "keep"; modal.innerHTML = ""; ui.edit = null; return "keep"; },
@@ -831,6 +843,7 @@ const A = {
   newT() { ui.newT = true; },
   cancelT() { ui.newT = false; },
   viewT(d) { ui.tView = d.t; ui.newT = false; ui.tab = "tourney"; history.replaceState(null, "", "#tourney"); window.scrollTo(0, 0); },
+  goTourneys() { ui.tab = "scores"; ui.scope = "tourney"; history.replaceState(null, "", "#scores"); window.scrollTo(0, 0); },
   toggleT(d) { ui.tOpen = ui.tOpen || {}; ui.tOpen[d.t] = !ui.tOpen[d.t]; },
   async createT() {
     const ids = ui.d.tPlayers || [];
