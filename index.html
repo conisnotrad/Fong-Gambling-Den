@@ -106,7 +106,7 @@ b.pos,.pos{color:var(--pos)} b.neg,.neg{color:var(--neg)} .zero{color:var(--mute
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .actions{display:flex;flex-direction:column;gap:8px}
 
-input[type=text],input[type=number],select{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px;min-width:0;max-width:100%}
+input[type=text],input[type=number],input[type=date],select{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 11px;min-width:0;max-width:100%}
 input[type=number]{width:80px}
 .inline{display:flex;gap:8px}
 .inline > input,.inline > select{flex:1}
@@ -222,6 +222,7 @@ const cls = x => r2(x) > 0 ? "pos" : r2(x) < 0 ? "neg" : "zero";
 const sydDate = ts => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ts));
 const niceDate = d => { const [y, m, dd] = d.split("-").map(Number); return new Date(Date.UTC(y, m - 1, dd)).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }); };
 const timeOf = ts => new Date(ts).toLocaleTimeString("en-AU", { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+const dayMs = d => { const [y, m, dd] = d.split("-").map(Number); return Date.UTC(y, m - 1, dd); };
 const fanRange = () => Array.from({ length: MAX_FAN - MIN_FAN + 1 }, (_, i) => MIN_FAN + i);
 const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -266,7 +267,7 @@ function statsFor(hands, settings, ids = []) {
   }
   return m;
 }
-// Tie-breaks: points, then lower total fan, then higher best hand, then fewer deal-ins, then admin's manual order.
+// Tie-breaks: points, then lower total fan, then higher best hand, then fewer discards (winning tiles fed), then admin's manual order.
 function rankList(statsMap, tieOrder = []) {
   const ti = id => { const i = tieOrder.indexOf(id); return i < 0 ? 1e9 : i; };
   return Object.values(statsMap).sort((a, b) =>
@@ -346,6 +347,14 @@ async function makeFirebaseStore() {
       const ref = F.doc(db, "nights", date);
       const snap = await tx.get(ref);
       const hands = snap.data()?.hands || [];
+      if (nh && nh.date !== date) { // moving the hand to another night
+        const ref2 = F.doc(db, "nights", nh.date);
+        const snap2 = await tx.get(ref2);
+        tx.update(ref, { hands: hands.filter(h => h.id !== id) });
+        if (snap2.exists()) tx.update(ref2, { hands: [...(snap2.data().hands || []), nh].sort((a, b) => a.ts - b.ts) });
+        else tx.set(ref2, { date: nh.date, hands: [nh] });
+        return;
+      }
       tx.update(ref, { hands: nh ? hands.map(h => h.id === id ? nh : h) : hands.filter(h => h.id !== id) });
     }),
     setSettings: p => F.setDoc(F.doc(db, "settings", "main"), p, { merge: true }),
@@ -384,7 +393,12 @@ function makeDemoStore() {
     createTable(data) { const id = newId(); D.tables[id] = { id, ...data }; save(); return ok(id); },
     updateTable(id, p) { Object.assign(D.tables[id], p); save(); return ok(); },
     addHand(h) { (D.nights[h.date] ||= { date: h.date, hands: [] }).hands.push(h); save(); return ok(); },
-    replaceHand(date, id, nh) { const n = D.nights[date]; n.hands = nh ? n.hands.map(h => h.id === id ? nh : h) : n.hands.filter(h => h.id !== id); save(); return ok(); },
+    replaceHand(date, id, nh) {
+      const n = D.nights[date];
+      if (nh && nh.date !== date) { n.hands = n.hands.filter(h => h.id !== id); const m = (D.nights[nh.date] ||= { date: nh.date, hands: [] }); m.hands = [...m.hands, nh].sort((a, b) => a.ts - b.ts); }
+      else n.hands = nh ? n.hands.map(h => h.id === id ? nh : h) : n.hands.filter(h => h.id !== id);
+      save(); return ok();
+    },
     setSettings(p) { Object.assign(D.settings, p); save(); return ok(); },
     saveTournament(id, data) { if (id) Object.assign(D.tournaments[id], data); else { id = newId(); D.tournaments[id] = { id, ...data }; } save(); return ok(id); },
   };
@@ -514,7 +528,7 @@ function boardRows(list, opts = {}) {
   return `<ul class="board">${list.map((s, i) => {
     const tieUp = opts.tie && i > 0 && sameMetrics(list[i - 1], s);
     const tieDown = opts.tie && i < list.length - 1 && sameMetrics(list[i + 1], s);
-    const meta = [`${s.wins} win${s.wins === 1 ? "" : "s"}`, `${s.selfDraws} self-draw${s.selfDraws === 1 ? "" : "s"}`, `${s.dealIns} deal-in${s.dealIns === 1 ? "" : "s"}`,
+    const meta = [`${s.wins} win${s.wins === 1 ? "" : "s"}`, `${s.selfDraws} self-draw${s.selfDraws === 1 ? "" : "s"}`, `${s.dealIns} discard${s.dealIns === 1 ? "" : "s"}`,
       s.bestFan ? `best ${s.bestFan} fan` : "", opts.tie ? `${s.fanTotal} fan total` : "", `${s.played} hand${s.played === 1 ? "" : "s"}`, opts.nights ? `${s.nights.size} night${s.nights.size === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
     const tieCtl = (tieUp || tieDown) ? ` <span class="badge warn">tied</span>` + (S.isAdmin && opts.T ? `<span class="tiebtns">${tieUp ? `<button data-act="tieSwap" data-t="${opts.T.id}" data-stage="${opts.stage}" data-i="${i}" data-dir="-1" aria-label="Move up">▲</button>` : ""}${tieDown ? `<button data-act="tieSwap" data-t="${opts.T.id}" data-stage="${opts.stage}" data-i="${i}" data-dir="1" aria-label="Move down">▼</button>` : ""}</span>` : "") : "";
     return `<li class="${opts.cut && i === opts.cut ? "cut" : ""}"><span class="rk">${i + 1}</span><span class="nm">${esc(pname(s.id))}${tieCtl}</span><span class="pts ${cls(s.pts)}">${fmt(s.pts)}</span><span class="meta">${meta}</span></li>`;
@@ -661,6 +675,7 @@ function tournamentAdmin(T) {
   return `<section class="card"><h3>Admin controls</h3><div class="row">${btn}${pause}</div>
     <div class="fields">
       <label>Name<input type="text" id="eName-${T.id}" data-model="eName" maxlength="60" value="${esc(ui.d.eName ?? T.name)}"></label>
+      <label>Date<input type="date" id="eTDate-${T.id}" data-model="eTDate" value="${esc(ui.d.eTDate ?? T.date)}"></label>
       <label>Current round<input type="number" id="eRound-${T.id}" data-model="eRound" min="1" max="20" value="${esc(ui.d.eRound ?? T.round)}"></label>
       <label>Hands per round<input type="number" id="eHpr" data-model="eHpr" min="1" max="99" value="${esc(ui.d.eHpr ?? T.handsPerRound)}"></label>
       <label>Qualifying rounds<input type="number" id="eQr" data-model="eQr" min="1" max="20" value="${esc(ui.d.eQr ?? T.qualRounds)}"></label>
@@ -715,18 +730,20 @@ function toast(msg, err = false, undo = null) {
 const modal = document.getElementById("modal");
 function openEdit(date, id) {
   const x = S.nights[date]?.hands?.find(h => h.id === id); if (!x) return;
-  ui.edit = { date, id, winner: x.winner, from: x.draw ? "draw" : x.selfDraw ? "self" : x.discarder, fan: x.fan || 3 };
+  ui.edit = { date, id, newDate: date, winner: x.winner, from: x.draw ? "draw" : x.selfDraw ? "self" : x.discarder, fan: x.fan || 3 };
   drawEdit();
 }
 function drawEdit() {
   const e = ui.edit; const x = S.nights[e.date].hands.find(h => h.id === e.id);
   modal.innerHTML = `<div class="modal-bg" data-act="closeModal"><div class="modal" role="dialog" aria-modal="true" aria-label="Edit hand" data-stop="1">
-    <h2>Edit hand · ${timeOf(x.ts)}</h2><p class="muted small">${esc(x.tableName || "")} · ${x.seats.map(p => esc(pname(p))).join(", ")}</p>
+    <h2>Edit hand · ${niceDate(x.date)}, ${timeOf(x.ts)}</h2><p class="muted small">${esc(x.tableName || "")} · ${x.seats.map(p => esc(pname(p))).join(", ")}</p>
     <div class="fields">
       <label>Result<select id="eFrom" data-change="editFrom"><option value="draw" ${e.from === "draw" ? "selected" : ""}>Draw</option><option value="self" ${e.from === "self" ? "selected" : ""}>Self-draw</option>${x.seats.filter(p => p !== e.winner).map(p => `<option value="${p}" ${e.from === p ? "selected" : ""}>Discarded by ${esc(pname(p))}</option>`).join("")}</select></label>
       <label>Winner<select id="eWin" data-change="editWin" ${e.from === "draw" ? "disabled" : ""}>${x.seats.map(p => `<option value="${p}" ${e.winner === p ? "selected" : ""}>${esc(pname(p))}</option>`).join("")}</select></label>
       <label>Fan<select id="eFan" data-change="editFan" ${e.from === "draw" ? "disabled" : ""}>${fanRange().map(f => `<option value="${f}" ${e.fan === f ? "selected" : ""}>${f}</option>`).join("")}</select></label>
+      <label>Date<input type="date" id="eDate" data-change="editDate" value="${e.newDate}"></label>
     </div>
+    <p class="muted small">Changing the date moves this hand to that game night.</p>
     <div class="row"><button class="btn" data-act="saveEdit">Save changes</button><button class="btn link" data-act="closeModal">Cancel</button></div></div></div>`;
 }
 
@@ -787,8 +804,9 @@ const A = {
     const e = ui.edit; const x = S.nights[e.date].hands.find(h => h.id === e.id);
     const nh = { ...x, draw: e.from === "draw", selfDraw: e.from === "self", winner: e.from === "draw" ? null : e.winner, discarder: e.from === "draw" || e.from === "self" ? null : e.from, fan: e.from === "draw" ? null : e.fan };
     if (nh.discarder === nh.winner && nh.winner) return toast("The winner can't also be the discarder.", true);
+    if (e.newDate !== e.date) { nh.date = e.newDate; nh.ts = x.ts + (dayMs(e.newDate) - dayMs(e.date)); } // keep the time of day
     modal.innerHTML = ""; ui.edit = null;
-    await run(store.replaceHand(e.date, e.id, nh), "Hand updated");
+    await run(store.replaceHand(e.date, e.id, nh), e.newDate !== e.date ? `Hand moved to ${niceDate(e.newDate)}` : "Hand updated");
   },
   async deleteHand(d) { await run(store.replaceHand(d.d, d.id, null), "Hand deleted"); },
   async addPlayer() {
@@ -862,9 +880,10 @@ const A = {
   },
   async saveTSettings(d) {
     const T = S.tournaments[d.t];
-    const p = { name: (ui.d.eName ?? T.name).trim() || T.name, round: Math.max(1, Math.round(+(ui.d.eRound ?? T.round)) || 1),
+    const td = ui.d.eTDate ?? T.date;
+    const p = { name: (ui.d.eName ?? T.name).trim() || T.name, date: /^\d{4}-\d{2}-\d{2}$/.test(td) ? td : T.date, round: Math.max(1, Math.round(+(ui.d.eRound ?? T.round)) || 1),
       handsPerRound: Math.max(1, +(ui.d.eHpr ?? T.handsPerRound)), qualRounds: Math.max(1, +(ui.d.eQr ?? T.qualRounds)), finalRounds: Math.max(1, +(ui.d.eFr ?? T.finalRounds)) };
-    ui.d.eHpr = ui.d.eQr = ui.d.eFr = ui.d.eName = ui.d.eRound = undefined;
+    ui.d.eHpr = ui.d.eQr = ui.d.eFr = ui.d.eName = ui.d.eRound = ui.d.eTDate = undefined;
     try {
       if (p.round !== T.round) for (const t of (T.tableIds || []).map(id => S.tables[id]).filter(Boolean)) await store.updateTable(t.id, { round: p.round });
       await store.saveTournament(T.id, p); toast("Tournament updated");
@@ -912,6 +931,7 @@ const CHANGES = {
   editFrom(el) { ui.edit.from = el.value; drawEdit(); return "keep"; },
   editWin(el) { ui.edit.winner = el.value; if (ui.edit.from === el.value) ui.edit.from = "self"; drawEdit(); return "keep"; },
   editFan(el) { ui.edit.fan = +el.value; return "keep"; },
+  editDate(el) { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) ui.edit.newDate = el.value; return "keep"; },
 };
 document.addEventListener("click", async ev => {
   const el = ev.target.closest("[data-act]"); if (!el || el.disabled) return;
