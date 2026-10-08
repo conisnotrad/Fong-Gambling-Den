@@ -256,7 +256,7 @@ function statsFor(hands, settings, ids = []) {
   const get = id => m[id] || (m[id] = blankStats(id));
   ids.forEach(get);
   for (const h of hands) {
-    (h.seats || []).forEach(p => { const s = get(p); s.played++; s.nights.add(h.date); if (h.draw) s.draws++; });
+    (h.seats || []).forEach(p => { const s = get(p); s.played++; s.nights.add(h.night || h.date); if (h.draw) s.draws++; });
     if (h.draw || !h.winner) continue;
     const d = handDeltas(h, settings);
     for (const p in d) get(p).pts += d[p];
@@ -294,7 +294,10 @@ if (validTabs.includes(location.hash.slice(1))) ui.tab = location.hash.slice(1);
 const pname = id => S.players[id]?.name || "Unknown player";
 const openTables = () => Object.values(S.tables).filter(t => t.open).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 let _hands = null;
-const allHands = () => _hands || (_hands = Object.values(S.nights).flatMap(n => n.hands || []).sort((a, b) => a.ts - b.ts));
+const allHands = () => _hands || (_hands = Object.entries(S.nights).flatMap(([k, n]) => (n.hands || []).map(h => h.night === k ? h : { ...h, night: k })).sort((a, b) => a.ts - b.ts));
+const curNight = () => S.settings.night || null; // {id, date, startedAt} while the admin has a night running
+// "2026-10-09" -> "Fri, 9 Oct 2026"; a second night on the same date ("2026-10-09-2") gets "(night 2)"
+const nightLabel = k => niceDate(k.slice(0, 10)) + (k.length > 10 ? ` (night ${k.slice(11)})` : "");
 const activePlayers = () => Object.values(S.players).filter(p => p.active !== false).sort((a, b) => a.name.localeCompare(b.name));
 
 // ---------- tournament helpers ----------
@@ -342,13 +345,14 @@ async function makeFirebaseStore() {
     updatePlayer: (id, p) => F.updateDoc(F.doc(db, "players", id), p),
     createTable: async data => (await F.addDoc(col("tables"), data)).id,
     updateTable: (id, p) => F.updateDoc(F.doc(db, "tables", id), p),
-    addHand: h => F.setDoc(F.doc(db, "nights", h.date), { date: h.date, hands: F.arrayUnion(h) }, { merge: true }),
+    addHand: h => F.setDoc(F.doc(db, "nights", h.night), { date: h.date, hands: F.arrayUnion(h) }, { merge: true }),
+    saveNight: (id, p) => F.setDoc(F.doc(db, "nights", id), p, { merge: true }),
     replaceHand: (date, id, nh) => F.runTransaction(db, async tx => {
       const ref = F.doc(db, "nights", date);
       const snap = await tx.get(ref);
       const hands = snap.data()?.hands || [];
-      if (nh && nh.date !== date) { // moving the hand to another night
-        const ref2 = F.doc(db, "nights", nh.date);
+      if (nh && nh.night !== date) { // moving the hand to another night
+        const ref2 = F.doc(db, "nights", nh.night);
         const snap2 = await tx.get(ref2);
         tx.update(ref, { hands: hands.filter(h => h.id !== id) });
         if (snap2.exists()) tx.update(ref2, { hands: [...(snap2.data().hands || []), nh].sort((a, b) => a.ts - b.ts) });
@@ -392,10 +396,11 @@ function makeDemoStore() {
     updatePlayer(id, p) { Object.assign(D.players[id], p); save(); return ok(); },
     createTable(data) { const id = newId(); D.tables[id] = { id, ...data }; save(); return ok(id); },
     updateTable(id, p) { Object.assign(D.tables[id], p); save(); return ok(); },
-    addHand(h) { (D.nights[h.date] ||= { date: h.date, hands: [] }).hands.push(h); save(); return ok(); },
+    addHand(h) { (D.nights[h.night] ||= { date: h.date, hands: [] }).hands.push(h); save(); return ok(); },
+    saveNight(id, p) { D.nights[id] = { hands: [], ...(D.nights[id] || {}), ...p }; save(); return ok(); },
     replaceHand(date, id, nh) {
       const n = D.nights[date];
-      if (nh && nh.date !== date) { n.hands = n.hands.filter(h => h.id !== id); const m = (D.nights[nh.date] ||= { date: nh.date, hands: [] }); m.hands = [...m.hands, nh].sort((a, b) => a.ts - b.ts); }
+      if (nh && nh.night !== date) { n.hands = n.hands.filter(h => h.id !== id); const m = (D.nights[nh.night] ||= { date: nh.date, hands: [] }); m.hands = [...m.hands, nh].sort((a, b) => a.ts - b.ts); }
       else n.hands = nh ? n.hands.map(h => h.id === id ? nh : h) : n.hands.filter(h => h.id !== id);
       save(); return ok();
     },
@@ -415,7 +420,9 @@ function seedDemo() {
   // Sample hands from "last week" and "today"
   [[10090, 0, 2, 3], [10070, 1, "self", 5], [10050, 2, 0, 4], [10030, 0, "self", 8], [10010, 3, 1, 3]].forEach(a => mk(...a));
   [[40, 1, 3, 4], [30, 0, 2, 6], [20, 2, "self", 3], [8, 3, 0, 5]].forEach(a => mk(...a));
-  return { players, tables, nights, settings: { ruleset: "uts10", selfDraw: "half" }, tournaments: {}, admin: false };
+  const today = sydDate(now);
+  if (nights[today]) nights[today].startedAt = now - 45 * 60000;
+  return { players, tables, nights, settings: { ruleset: "uts10", selfDraw: "half", night: { id: today, date: today, startedAt: now - 45 * 60000 } }, tournaments: {}, admin: false };
 }
 
 let store;
@@ -464,7 +471,19 @@ function tourneyLine(t) {
 
 const VIEWS = {};
 
+function nightCard(compact) {
+  const N = curNight();
+  if (N) {
+    const n = S.nights[N.id]?.hands?.length || 0;
+    return `<section class="card"><div class="row between"><div class="grow"><h3>Game night running</h3><p><b>${nightLabel(N.id)}</b> · started ${timeOf(N.startedAt)} · ${n} hand${n === 1 ? "" : "s"}</p></div>
+      ${S.isAdmin ? confirmBtn("endNight", "End night", "Tap again to end the night", "endNight") : ""}</div>
+      ${S.isAdmin && !compact ? `<p class="muted small">Ending the night closes casual tables and pauses any running tournament. Hands can't be recorded until you begin the next night.</p>` : ""}</section>`;
+  }
+  return `<section class="card empty"><h2>No game night running</h2><p class="muted">${S.isAdmin ? "Begin a night to open recording. Every hand until you end it counts toward that night, even past midnight." : "The admin begins each game night. Hands can be recorded once it's started."}</p>
+    ${S.isAdmin ? `<button class="btn" data-act="beginNight">Begin tonight</button>` : ""}</section>`;
+}
 VIEWS.record = () => {
+  if (!curNight()) return nightCard();
   const open = openTables();
   if (!open.length) return S.isAdmin
     ? `<section class="card empty"><h2>No table is open</h2><p class="muted">Open a table and seat four players, then record hands here.</p><button class="btn" data-act="tab" data-tab="tables">Open a table</button></section>`
@@ -496,8 +515,7 @@ VIEWS.record = () => {
   }
   h += `<div class="actions"><button class="btn big" data-act="recordHand" ${ready ? "" : "disabled"}>Record hand</button>
     ${confirmBtn("draw:" + t.id, "Record a draw (no winner)", "Tap again to record a draw", "recordDraw")}</div>`;
-  const today = sydDate(Date.now());
-  const recent = allHands().filter(x => x.tableId === t.id && x.date === today).slice(-5).reverse();
+  const recent = allHands().filter(x => x.tableId === t.id && x.night === curNight().id).slice(-5).reverse();
   if (recent.length) h += `<section class="card"><h3>Latest at ${esc(t.name)}</h3><ul class="hands">${recent.map(x => {
     const d = handDeltas(x, S.settings); return `<li><span class="t">${timeOf(x.ts)}</span><span class="d">${handLine(x)}</span><span class="v ${cls(d[x.winner] || 0)}">${x.draw ? "" : fmt(d[x.winner] || 0)}</span></li>`; }).join("")}</ul></section>`;
   return h + `</div>`;
@@ -506,7 +524,7 @@ VIEWS.record = () => {
 VIEWS.tables = () => {
   const open = openTables();
   const seatedAt = {}; open.forEach(t => t.seats.forEach(p => seatedAt[p] = t));
-  let h = `<div class="stack">`;
+  let h = `<div class="stack">` + nightCard();
   if (S.isAdmin) h += `<section class="card"><h2>Open a table</h2><div class="inline"><input type="text" id="newTable" data-model="newTable" placeholder="Table ${open.length + 1}" value="${esc(ui.d.newTable || "")}" maxlength="40" aria-label="Table name"><button class="btn" data-act="openTable">Open</button></div></section>`;
   if (!open.length) h += S.isAdmin ? `<p class="muted">No tables are open right now.</p>` : `<section class="card empty"><h2>No tables are open</h2><p class="muted">The admin opens tables. Once one is open, you can seat yourself and others here.</p></section>`;
   for (const t of open) {
@@ -538,9 +556,8 @@ const rulesNote = () => `<p class="muted small">Scored with ${esc(RULESETS[S.set
 
 VIEWS.scores = () => {
   const hands = allHands();
-  const dates = [...new Set(hands.map(h => h.date))].sort().reverse();
-  const today = sydDate(Date.now());
-  let h = `<div class="stack"><div class="seg" role="tablist">${[["today", "Today"], ["night", "Night"], ["all", "All-time"], ["tourney", "Tourneys"], ["elo", "Elo"]].map(([k, l]) =>
+  const dates = Object.keys(S.nights).filter(k => S.nights[k].hands?.length).sort().reverse();
+  let h = `<div class="stack"><div class="seg" role="tablist">${[["today", "Tonight"], ["night", "Night"], ["all", "All-time"], ["tourney", "Tourneys"], ["elo", "Elo"]].map(([k, l]) =>
     `<button class="${ui.scope === k ? "on" : ""}" data-act="scope" data-scope="${k}">${l}</button>`).join("")}</div>`;
   if (ui.scope === "tourney") return h + tourneyHistory() + `</div>`;
   if (ui.scope === "elo") return h + `<section class="card empty"><h2>Elo ratings</h2><span class="badge warn">To be created</span>
@@ -549,13 +566,17 @@ VIEWS.scores = () => {
   if (ui.scope === "night") {
     if (!dates.length) return h + `<section class="card empty"><h2>No game nights yet</h2><p class="muted">Nights appear here once the first hand is recorded.</p></section></div>`;
     if (!ui.date || !dates.includes(ui.date)) ui.date = dates[0];
-    h += `<select id="nightPick" data-change="night" aria-label="Game night">${dates.map(d => `<option value="${d}" ${d === ui.date ? "selected" : ""}>${niceDate(d)} · ${S.nights[d]?.hands?.length || 0} hands</option>`).join("")}</select>`;
-    sel = hands.filter(x => x.date === ui.date); title = niceDate(ui.date);
+    h += `<select id="nightPick" data-change="night" aria-label="Game night">${dates.map(d => `<option value="${d}" ${d === ui.date ? "selected" : ""}>${nightLabel(d)} · ${S.nights[d]?.hands?.length || 0} hands</option>`).join("")}</select>`;
+    sel = hands.filter(x => x.night === ui.date); title = nightLabel(ui.date);
   } else if (ui.scope === "all") { sel = hands; title = "All-time"; }
-  else { sel = hands.filter(x => x.date === today); title = "Today · " + niceDate(today); }
+  else {
+    const N = curNight(), k = N ? N.id : dates[0];
+    sel = k ? hands.filter(x => x.night === k) : [];
+    title = N ? "Tonight · " + nightLabel(k) : k ? "Last night · " + nightLabel(k) : "Tonight";
+  }
   const list = rankList(statsFor(sel, S.settings)).filter(s => s.played > 0);
   h += `<section class="card"><div class="row between"><h2>${title}</h2><span class="muted small num">${sel.length} hand${sel.length === 1 ? "" : "s"}</span></div>`;
-  h += list.length ? boardRows(list, { nights: ui.scope === "all" }) : `<p class="muted">No hands recorded ${ui.scope === "today" ? "today yet" : "here"}.</p>`;
+  h += list.length ? boardRows(list, { nights: ui.scope === "all" }) : `<p class="muted">No hands recorded ${ui.scope === "today" ? (curNight() ? "tonight yet" : "yet. The admin begins each game night") : "here"}.</p>`;
   h += rulesNote() + `</section></div>`;
   return h;
 };
@@ -579,6 +600,7 @@ function tourneyHistory() {
       h += `<div class="body stack">`;
       if (T.stage === "final" || T.stage === "done") h += `<div><h3>Final table</h3>${boardRows(tStandings(T, "final"), { tie: true })}</div>`;
       h += `<div><h3>Qualifying (${T.qualRounds} round${T.qualRounds === 1 ? "" : "s"} of ${T.handsPerRound} hands)</h3>${boardRows(tStandings(T, "qual"), { tie: true, cut: 4 })}</div>`;
+      h += tourneyHands(T);
       if (S.isAdmin && T.stage !== "done") h += tournamentAdmin(T);
       if (T.stage !== "done" && !T.paused) h += `<button class="btn link" data-act="viewT" data-t="${T.id}">Open in Tourney tab</button>`;
       h += `</div>`;
@@ -592,7 +614,7 @@ VIEWS.thistory = () => { ui.tab = "scores"; ui.scope = "tourney"; return VIEWS.s
 function nightBlock(d, open, title) {
   const hs = [...S.nights[d].hands].sort((a, b) => b.ts - a.ts);
   const tn = [...new Set(hs.filter(x => x.tournamentId).map(x => S.tournaments[x.tournamentId]?.name).filter(Boolean))];
-  let h = `<div class="night"><button data-act="toggleNight" data-d="${d}" aria-expanded="${open}"><span><h2>${title || niceDate(d)}</h2><span class="muted small">${hs.length} hand${hs.length === 1 ? "" : "s"}${tn.length ? " · " + esc(tn.join(", ")) : ""}</span></span><span aria-hidden="true">${open ? "▾" : "▸"}</span></button>`;
+  let h = `<div class="night"><button data-act="toggleNight" data-d="${d}" aria-expanded="${open}"><span><h2>${title || nightLabel(d)}</h2><span class="muted small">${hs.length} hand${hs.length === 1 ? "" : "s"}${tn.length ? " · " + esc(tn.join(", ")) : ""}</span></span><span aria-hidden="true">${open ? "▾" : "▸"}</span></button>`;
   if (open) h += `<div class="body"><ul class="hands">${hs.map(x => {
     const dl = handDeltas(x, S.settings);
     const T = x.tournamentId && S.tournaments[x.tournamentId];
@@ -602,12 +624,13 @@ function nightBlock(d, open, title) {
 }
 // Hands tab: tonight's hands first (always open), then every earlier night
 VIEWS.hands = () => {
-  const today = sydDate(Date.now());
+  const N = curNight(), today = N ? N.id : null;
   const dates = Object.keys(S.nights).filter(d => S.nights[d].hands?.length).sort().reverse();
   let h = `<div class="stack">`;
-  h += dates.includes(today)
-    ? nightBlock(today, ui.histOpen[today] ?? true, "Tonight · " + niceDate(today))
-    : `<section class="card empty"><h2>Tonight · ${niceDate(today)}</h2><p class="muted">No hands recorded yet tonight.</p></section>`;
+  if (!N) h += nightCard(true);
+  else h += dates.includes(today)
+    ? nightBlock(today, ui.histOpen[today] ?? true, "Tonight · " + nightLabel(today))
+    : `<section class="card empty"><h2>Tonight · ${nightLabel(today)}</h2><p class="muted">No hands recorded yet tonight.</p></section>`;
   if (!S.isAdmin && dates.length) h += `<p class="muted small">Spotted a mistake? Only the admin can edit or delete hands.</p>`;
   const older = dates.filter(d => d !== today);
   h += `<h3>Hand history</h3>`;
@@ -650,7 +673,8 @@ function newTournamentForm() {
     </div>
     <p class="muted small">Needs a multiple of 4 players, at least 8. Round 1 seating is random; later rounds use snake seating by running points. After the qualifying rounds, the top 4 play the final table with points reset.</p>
     ${n && (n % 4 || n < 8) ? `<p class="note warn">${n} players picked. ${n < 8 ? `Pick ${8 - n} more.` : `Pick ${4 - (n % 4)} more or remove ${n % 4}.`}</p>` : ""}
-    <div class="row"><button class="btn" data-act="createT" ${n >= 8 && n % 4 === 0 ? "" : "disabled"}>Start tournament</button>${ui.newT ? `<button class="btn link" data-act="cancelT">Cancel</button>` : ""}</div></section>`;
+    ${curNight() ? "" : `<p class="note warn">A game night must be running to start a tournament. <button class="btn link" data-act="beginNight">Begin tonight</button></p>`}
+    <div class="row"><button class="btn" data-act="createT" ${n >= 8 && n % 4 === 0 && curNight() ? "" : "disabled"}>Start tournament</button>${ui.newT ? `<button class="btn link" data-act="cancelT">Cancel</button>` : ""}</div></section>`;
 }
 function tournamentView(T) {
   let h = `<section class="card"><div class="row between"><h2 class="grow">${esc(T.name)}</h2><span class="badge ${T.paused ? "warn" : ""}">${T.stage === "done" ? "Finished" : T.paused ? "Paused" : "Live"}</span></div><p class="muted">${niceDate(T.date)} · ${stageLabel(T)}</p>`;
@@ -669,8 +693,19 @@ function tournamentView(T) {
   }
   const ql = tStandings(T, "qual");
   h += `<section class="card"><div class="row between"><h2>${T.stage === "qual" ? "Live leaderboard" : "Qualifying standings"}</h2></div>${T.stage === "qual" ? `<p class="muted small">Dashed line marks the final-table cut (top 4).</p>` : ""}${boardRows(ql, { tie: true, T, stage: "qual", cut: 4 })}${T.stage === "qual" ? rulesNote() : ""}</section>`;
+  h += tourneyHands(T);
   if (S.isAdmin && T.stage !== "done") h += tournamentAdmin(T);
   return h;
+}
+function tourneyHands(T) {
+  const hs = tHands(T).slice().reverse();
+  const open = ui.tHandsOpen?.[T.id];
+  let h = `<section class="card"><div class="row between"><h2>Hand history</h2><button class="btn ghost" data-act="toggleTHands" data-t="${T.id}">${open ? "Hide" : `Show all ${hs.length} hand${hs.length === 1 ? "" : "s"}`}</button></div>`;
+  if (open) h += hs.length ? `<ul class="hands">${hs.map(x => {
+    const dl = handDeltas(x, S.settings);
+    return `<li><span class="t">${timeOf(x.ts)}</span><span class="d">${handLine(x)}<div class="sub">${x.stage === "final" ? "Final" : "Qualifying"} round ${x.round} · ${esc(x.tableName || "")} · ${nightLabel(x.night)}</div>${S.isAdmin ? `<div class="row"><button class="btn link" data-act="editHand" data-d="${x.night}" data-id="${x.id}">Edit</button>${confirmBtn("del:" + x.id, "Delete", "Tap again to delete", "deleteHand", `data-d="${x.night}" data-id="${x.id}"`, "btn link")}</div>` : ""}</span><span class="v ${cls(dl[x.winner] || 0)}">${x.draw ? "—" : fmt(dl[x.winner] || 0)}</span></li>`;
+  }).join("")}</ul>` : `<p class="muted">No hands recorded in this tournament yet.</p>`;
+  return h + `</section>`;
 }
 function tournamentAdmin(T) {
   const tbls = (T.tableIds || []).map(id => S.tables[id]).filter(Boolean);
@@ -679,7 +714,8 @@ function tournamentAdmin(T) {
   if (T.stage === "qual") label = T.round < T.qualRounds ? `Start round ${T.round + 1} (snake seating)` : "Start the final table";
   else label = T.round < T.finalRounds ? `Start final round ${T.round + 1}` : "Finish tournament";
   const key = "adv:" + T.id;
-  const btn = T.paused ? `<button class="btn" data-act="resumeT" data-t="${T.id}">Resume tournament</button>`
+  const btn = T.paused ? (curNight() ? `<button class="btn" data-act="resumeT" data-t="${T.id}">Resume tournament</button>`
+      : `<button class="btn" disabled>Resume tournament</button><span class="muted small">Begin a game night to resume. <button class="btn link" data-act="beginNight">Begin tonight</button></span>`)
     : incomplete
     ? confirmBtn(key, label, "Not every table has finished. Tap again to continue anyway", "advanceT", `data-t="${T.id}"`, "btn")
     : `<button class="btn" data-act="advanceT" data-confirmed="1" data-t="${T.id}">${label}</button>`;
@@ -742,7 +778,7 @@ function toast(msg, err = false, undo = null) {
 const modal = document.getElementById("modal");
 function openEdit(date, id) {
   const x = S.nights[date]?.hands?.find(h => h.id === id); if (!x) return;
-  ui.edit = { date, id, newDate: date, winner: x.winner, from: x.draw ? "draw" : x.selfDraw ? "self" : x.discarder, fan: x.fan || 3 };
+  ui.edit = { date, id, newDate: (x.date || date).slice(0, 10), winner: x.winner, from: x.draw ? "draw" : x.selfDraw ? "self" : x.discarder, fan: x.fan || 3 };
   drawEdit();
 }
 function drawEdit() {
@@ -769,8 +805,24 @@ const run = async (p, okMsg, undo) => {
 function draftReset() { ui.winner = null; ui.from = null; ui.fan = null; }
 function buildHand(t, part) {
   const ts = Date.now();
-  return { id: newId(), ts, date: sydDate(ts), tableId: t.id, tableName: t.name, seats: [...t.seats], winner: null, discarder: null, selfDraw: false, draw: false, fan: null,
+  const N = curNight();
+  return { id: newId(), ts, date: N ? N.date : sydDate(ts), night: N ? N.id : sydDate(ts), tableId: t.id, tableName: t.name, seats: [...t.seats], winner: null, discarder: null, selfDraw: false, draw: false, fan: null,
     tournamentId: t.tournamentId || null, stage: t.stage || null, round: t.round || null, ...part };
+}
+// Start a game night if none is running (admin). Key is the date; a second night on the same date gets "-2", "-3"...
+async function ensureNight() {
+  if (curNight()) return;
+  const now = Date.now(), date = sydDate(now);
+  let id = date, n = 1;
+  while (S.nights[id] && (S.nights[id].endedAt || S.nights[id].startedAt)) id = `${date}-${++n}`;
+  await store.saveNight(id, { date, startedAt: now });
+  await store.setSettings({ night: { id, date, startedAt: now } });
+}
+async function pauseTournament(T) {
+  const tbls = (T.tableIds || []).map(id => S.tables[id]).filter(Boolean);
+  const pausedTables = tbls.map(t => ({ id: t.id, name: t.name, seats: t.seats }));
+  for (const t of tbls) await store.updateTable(t.id, { open: false });
+  await store.saveTournament(T.id, { paused: true, pausedAt: Date.now(), pausedTables });
 }
 // Take players off any other open table (so nobody sits at two tables at once)
 async function unseatElsewhere(ids, keepTableIds) {
@@ -792,7 +844,7 @@ const A = {
     const h = buildHand(t, { winner: ui.winner, discarder: ui.from === "self" ? null : ui.from, selfDraw: ui.from === "self", fan: ui.fan });
     draftReset(); render();
     const d = handDeltas(h, S.settings);
-    await run(store.addHand(h), `${pname(h.winner)} ${fmt(d[h.winner])} recorded`, S.isAdmin ? () => store.replaceHand(h.date, h.id, null) : null);
+    await run(store.addHand(h), `${pname(h.winner)} ${fmt(d[h.winner])} recorded`, S.isAdmin ? () => store.replaceHand(h.night, h.id, null) : null);
   },
   async recordDraw() {
     const t = S.tables[ui.tableId]; if (!t) return;
@@ -808,7 +860,20 @@ const A = {
   async unseat(d) { const t = S.tables[d.t]; await run(store.updateTable(t.id, { seats: t.seats.filter(p => p !== d.id) })); },
   async closeTable(d) { if (!S.isAdmin) return toast("Only the admin can close tables.", true); await run(store.updateTable(d.t, { open: false }), "Table closed"); },
   scope(d) { ui.scope = d.scope; },
-  toggleNight(d) { ui.histOpen[d.d] = !(ui.histOpen[d.d] ?? d.d === sydDate(Date.now())); },
+  toggleNight(d) { ui.histOpen[d.d] = !(ui.histOpen[d.d] ?? d.d === curNight()?.id); },
+  async beginNight() { await run(ensureNight(), "Game night started"); },
+  async endNight() {
+    const N = curNight(); if (!N) return;
+    try {
+      const running = activeTournaments().filter(T => !T.paused);
+      for (const T of running) await pauseTournament(T);
+      for (const t of openTables().filter(t => !t.tournamentId)) await store.updateTable(t.id, { open: false });
+      await store.saveNight(N.id, { endedAt: Date.now() });
+      await store.setSettings({ night: null });
+      toast(`${nightLabel(N.id)} ended`);
+    } catch (e) { console.error(e); toast("Couldn't end the night: " + (e.message || e), true); }
+  },
+  toggleTHands(d) { ui.tHandsOpen = ui.tHandsOpen || {}; ui.tHandsOpen[d.t] = !ui.tHandsOpen[d.t]; },
   moreHist() { ui.histLimit += 15; },
   editHand(d) { openEdit(d.d, d.id); return "keep"; },
   closeModal(d, el, ev) { if (ev && el.dataset.act === "closeModal" && ev.target.closest("[data-stop]") && !ev.target.closest(".btn")) return "keep"; modal.innerHTML = ""; ui.edit = null; return "keep"; },
@@ -816,9 +881,11 @@ const A = {
     const e = ui.edit; const x = S.nights[e.date].hands.find(h => h.id === e.id);
     const nh = { ...x, draw: e.from === "draw", selfDraw: e.from === "self", winner: e.from === "draw" ? null : e.winner, discarder: e.from === "draw" || e.from === "self" ? null : e.from, fan: e.from === "draw" ? null : e.fan };
     if (nh.discarder === nh.winner && nh.winner) return toast("The winner can't also be the discarder.", true);
-    if (e.newDate !== e.date) { nh.date = e.newDate; nh.ts = x.ts + (dayMs(e.newDate) - dayMs(e.date)); } // keep the time of day
+    const oldDate = x.date || e.date.slice(0, 10);
+    if (e.newDate !== oldDate) { nh.date = e.newDate; nh.night = e.newDate; nh.ts = x.ts + (dayMs(e.newDate) - dayMs(oldDate)); } // keep the time of day
+    else nh.night = e.date;
     modal.innerHTML = ""; ui.edit = null;
-    await run(store.replaceHand(e.date, e.id, nh), e.newDate !== e.date ? `Hand moved to ${niceDate(e.newDate)}` : "Hand updated");
+    await run(store.replaceHand(e.date, e.id, nh), nh.night !== e.date ? `Hand moved to ${niceDate(e.newDate)}` : "Hand updated");
   },
   async deleteHand(d) { await run(store.replaceHand(d.d, d.id, null), "Hand deleted"); },
   async addPlayer() {
@@ -848,7 +915,8 @@ const A = {
   async createT() {
     const ids = ui.d.tPlayers || [];
     if (ids.length < 8 || ids.length % 4) return;
-    const today = sydDate(Date.now());
+    if (!curNight()) return toast("Begin tonight's game night first. Tournaments run inside a night.", true);
+    const today = curNight().date;
     const name = (ui.d.tName || "").trim() || `Tournament ${niceDate(today)}`;
     const hpr = Math.max(1, +ui.d.tHpr || 4), qr = Math.max(1, +ui.d.tQr || 3), fr = Math.max(1, +ui.d.tFr || 1);
     try {
@@ -904,17 +972,13 @@ const A = {
   },
   async pauseT(d) {
     const T = S.tournaments[d.t];
-    const tbls = (T.tableIds || []).map(id => S.tables[id]).filter(Boolean);
-    try {
-      const pausedTables = tbls.map(t => ({ id: t.id, name: t.name, seats: t.seats }));
-      for (const t of tbls) await store.updateTable(t.id, { open: false });
-      await store.saveTournament(T.id, { paused: true, pausedAt: Date.now(), pausedTables });
-      toast(`${T.name} paused`);
-    } catch (e) { console.error(e); toast("Couldn't pause: " + (e.message || e), true); }
+    try { await pauseTournament(T); toast(`${T.name} paused`); }
+    catch (e) { console.error(e); toast("Couldn't pause: " + (e.message || e), true); }
   },
   async resumeT(d) {
     const T = S.tournaments[d.t];
     const snap = T.pausedTables || [];
+    if (!curNight()) return toast("Begin tonight's game night first, then resume.", true);
     try {
       await unseatElsewhere(snap.flatMap(t => t.seats), snap.map(t => t.id));
       for (const t of snap) await store.updateTable(t.id, { open: true, seats: t.seats, round: T.round, stage: T.stage });
