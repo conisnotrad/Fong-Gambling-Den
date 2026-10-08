@@ -73,7 +73,7 @@ p{margin:0}
 .chip.on{background:var(--jade);border-color:var(--jade);color:var(--jade-ink)}
 .chip .cnt{font-weight:500;opacity:.75;font-variant-numeric:tabular-nums;margin-left:4px}
 .seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:var(--surface-2);border-radius:12px;padding:4px;gap:4px}
-.seg button{border:0;background:transparent;border-radius:9px;padding:8px 6px;font-weight:600;color:var(--muted)}
+.seg button{border:0;background:transparent;border-radius:9px;padding:8px 2px;font-weight:600;font-size:13.5px;color:var(--muted);min-width:0;white-space:nowrap}
 .seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.12)}
 
 .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -303,7 +303,7 @@ function tStandings(T, stage) {
   return rankList(statsFor(tHands(T, stage), S.settings, ids), T.tieOrder || []);
 }
 const roundCount = (T, tableId) => tHands(T, T.stage).filter(h => h.round === T.round && h.tableId === tableId).length;
-const stageLabel = T => T.stage === "done" ? "Finished" :
+const stageLabel = T => T.stage === "done" ? "Finished" : (T.paused ? "Paused · " : "") +
   `${T.stage === "final" ? "Final" : "Qualifying"} · Round ${T.round} of ${T.stage === "final" ? T.finalRounds : T.qualRounds} · ${WINDS[(T.round - 1) % 4]} wind`;
 const activeTournaments = () => Object.values(S.tournaments).filter(T => T.stage !== "done").sort((a, b) => b.createdAt - a.createdAt);
 
@@ -526,9 +526,11 @@ VIEWS.scores = () => {
   const hands = allHands();
   const dates = [...new Set(hands.map(h => h.date))].sort().reverse();
   const today = sydDate(Date.now());
-  let h = `<div class="stack"><div class="seg" role="tablist">${[["today", "Today"], ["night", "Night"], ["all", "All-time"], ["tourney", "Tourneys"]].map(([k, l]) =>
+  let h = `<div class="stack"><div class="seg" role="tablist">${[["today", "Today"], ["night", "Night"], ["all", "All-time"], ["tourney", "Tourneys"], ["elo", "Elo"]].map(([k, l]) =>
     `<button class="${ui.scope === k ? "on" : ""}" data-act="scope" data-scope="${k}">${l}</button>`).join("")}</div>`;
   if (ui.scope === "tourney") return h + tourneyHistory() + `</div>`;
+  if (ui.scope === "elo") return h + `<section class="card empty"><h2>Elo ratings</h2><span class="badge warn">To be created</span>
+    <p class="muted">Player ratings are coming in a later update. Every hand recorded from day one keeps the seats, winner and discarder, so the ratings will cover your full history once they're added.</p></section></div>`;
   let sel, title;
   if (ui.scope === "night") {
     if (!dates.length) return h + `<section class="card empty"><h2>No game nights yet</h2><p class="muted">Nights appear here once the first hand is recorded.</p></section></div>`;
@@ -562,6 +564,7 @@ function tourneyHistory() {
       h += `<div class="body stack">`;
       if (T.stage === "final" || T.stage === "done") h += `<div><h3>Final table</h3>${boardRows(tStandings(T, "final"), { tie: true })}</div>`;
       h += `<div><h3>Qualifying (${T.qualRounds} round${T.qualRounds === 1 ? "" : "s"} of ${T.handsPerRound} hands)</h3>${boardRows(tStandings(T, "qual"), { tie: true, cut: 4 })}</div>`;
+      if (S.isAdmin && T.stage !== "done") h += tournamentAdmin(T);
       h += `<button class="btn link" data-act="viewT" data-t="${T.id}">Open in Tourney tab</button></div>`;
     }
     h += `</div>`;
@@ -624,7 +627,8 @@ function newTournamentForm() {
     <div class="row"><button class="btn" data-act="createT" ${n >= 8 && n % 4 === 0 ? "" : "disabled"}>Start tournament</button>${ui.newT ? `<button class="btn link" data-act="cancelT">Cancel</button>` : ""}</div></section>`;
 }
 function tournamentView(T) {
-  let h = `<section class="card"><div class="row between"><h2 class="grow">${esc(T.name)}</h2><span class="badge">${T.stage === "done" ? "Finished" : "Live"}</span></div><p class="muted">${niceDate(T.date)} · ${stageLabel(T)}</p>`;
+  let h = `<section class="card"><div class="row between"><h2 class="grow">${esc(T.name)}</h2><span class="badge ${T.paused ? "warn" : ""}">${T.stage === "done" ? "Finished" : T.paused ? "Paused" : "Live"}</span></div><p class="muted">${niceDate(T.date)} · ${stageLabel(T)}</p>`;
+  if (T.paused) h += `<p class="note warn">This tournament is paused. Its tables are closed until the admin resumes it.</p>`;
   if (T.stage === "done") h += `<p class="note">Champion: <b>${esc(pname(T.champion))}</b></p>`;
   // live tables
   if (T.stage !== "done") {
@@ -649,16 +653,20 @@ function tournamentAdmin(T) {
   if (T.stage === "qual") label = T.round < T.qualRounds ? `Start round ${T.round + 1} (snake seating)` : "Start the final table";
   else label = T.round < T.finalRounds ? `Start final round ${T.round + 1}` : "Finish tournament";
   const key = "adv:" + T.id;
-  const btn = incomplete
+  const btn = T.paused ? `<button class="btn" data-act="resumeT" data-t="${T.id}">Resume tournament</button>`
+    : incomplete
     ? confirmBtn(key, label, "Not every table has finished. Tap again to continue anyway", "advanceT", `data-t="${T.id}"`, "btn")
     : `<button class="btn" data-act="advanceT" data-confirmed="1" data-t="${T.id}">${label}</button>`;
-  return `<section class="card"><h3>Admin controls</h3>${btn}
+  const pause = T.paused ? "" : confirmBtn("pause:" + T.id, "Pause tournament", "Tap again to pause and close its tables", "pauseT", `data-t="${T.id}"`);
+  return `<section class="card"><h3>Admin controls</h3><div class="row">${btn}${pause}</div>
     <div class="fields">
+      <label>Name<input type="text" id="eName-${T.id}" data-model="eName" maxlength="60" value="${esc(ui.d.eName ?? T.name)}"></label>
+      <label>Current round<input type="number" id="eRound-${T.id}" data-model="eRound" min="1" max="20" value="${esc(ui.d.eRound ?? T.round)}"></label>
       <label>Hands per round<input type="number" id="eHpr" data-model="eHpr" min="1" max="99" value="${esc(ui.d.eHpr ?? T.handsPerRound)}"></label>
       <label>Qualifying rounds<input type="number" id="eQr" data-model="eQr" min="1" max="20" value="${esc(ui.d.eQr ?? T.qualRounds)}"></label>
       <label>Final table rounds<input type="number" id="eFr" data-model="eFr" min="1" max="20" value="${esc(ui.d.eFr ?? T.finalRounds)}"></label>
-    </div><div><button class="btn ghost" data-act="saveTSettings" data-t="${T.id}">Save round settings</button></div>
-    <p class="muted small">Tied players show ▲▼ so you can set the order once the tie-breaks run out.</p></section>`;
+    </div><div><button class="btn ghost" data-act="saveTSettings" data-t="${T.id}">Save changes</button></div>
+    <p class="muted small">Change the current round if you need to replay or skip one. Tournament seating can be changed on the Tables tab. Tied players show ▲▼ so you can set the order once the tie-breaks run out.</p></section>`;
 }
 
 VIEWS.settings = () => {
@@ -854,9 +862,33 @@ const A = {
   },
   async saveTSettings(d) {
     const T = S.tournaments[d.t];
-    const p = { handsPerRound: Math.max(1, +(ui.d.eHpr ?? T.handsPerRound)), qualRounds: Math.max(1, +(ui.d.eQr ?? T.qualRounds)), finalRounds: Math.max(1, +(ui.d.eFr ?? T.finalRounds)) };
-    ui.d.eHpr = ui.d.eQr = ui.d.eFr = undefined;
-    await run(store.saveTournament(T.id, p), "Round settings saved");
+    const p = { name: (ui.d.eName ?? T.name).trim() || T.name, round: Math.max(1, Math.round(+(ui.d.eRound ?? T.round)) || 1),
+      handsPerRound: Math.max(1, +(ui.d.eHpr ?? T.handsPerRound)), qualRounds: Math.max(1, +(ui.d.eQr ?? T.qualRounds)), finalRounds: Math.max(1, +(ui.d.eFr ?? T.finalRounds)) };
+    ui.d.eHpr = ui.d.eQr = ui.d.eFr = ui.d.eName = ui.d.eRound = undefined;
+    try {
+      if (p.round !== T.round) for (const t of (T.tableIds || []).map(id => S.tables[id]).filter(Boolean)) await store.updateTable(t.id, { round: p.round });
+      await store.saveTournament(T.id, p); toast("Tournament updated");
+    } catch (e) { console.error(e); toast("Couldn't save: " + (e.message || e), true); }
+  },
+  async pauseT(d) {
+    const T = S.tournaments[d.t];
+    const tbls = (T.tableIds || []).map(id => S.tables[id]).filter(Boolean);
+    try {
+      const pausedTables = tbls.map(t => ({ id: t.id, name: t.name, seats: t.seats }));
+      for (const t of tbls) await store.updateTable(t.id, { open: false });
+      await store.saveTournament(T.id, { paused: true, pausedAt: Date.now(), pausedTables });
+      toast(`${T.name} paused`);
+    } catch (e) { console.error(e); toast("Couldn't pause: " + (e.message || e), true); }
+  },
+  async resumeT(d) {
+    const T = S.tournaments[d.t];
+    const snap = T.pausedTables || [];
+    try {
+      await unseatElsewhere(snap.flatMap(t => t.seats), snap.map(t => t.id));
+      for (const t of snap) await store.updateTable(t.id, { open: true, seats: t.seats, round: T.round, stage: T.stage });
+      await store.saveTournament(T.id, { paused: false, pausedTables: [] });
+      toast(`${T.name} resumed`);
+    } catch (e) { console.error(e); toast("Couldn't resume: " + (e.message || e), true); }
   },
   async tieSwap(d) {
     const T = S.tournaments[d.t]; const list = tStandings(T, d.stage).map(s => s.id);
