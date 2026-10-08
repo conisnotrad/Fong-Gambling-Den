@@ -526,8 +526,9 @@ VIEWS.scores = () => {
   const hands = allHands();
   const dates = [...new Set(hands.map(h => h.date))].sort().reverse();
   const today = sydDate(Date.now());
-  let h = `<div class="stack"><div class="seg" role="tablist">${[["today", "Today"], ["night", "Game night"], ["all", "All-time"]].map(([k, l]) =>
+  let h = `<div class="stack"><div class="seg" role="tablist">${[["today", "Today"], ["night", "Night"], ["all", "All-time"], ["tourney", "Tourneys"]].map(([k, l]) =>
     `<button class="${ui.scope === k ? "on" : ""}" data-act="scope" data-scope="${k}">${l}</button>`).join("")}</div>`;
+  if (ui.scope === "tourney") return h + tourneyHistory() + `</div>`;
   let sel, title;
   if (ui.scope === "night") {
     if (!dates.length) return h + `<section class="card empty"><h2>No game nights yet</h2><p class="muted">Nights appear here once the first hand is recorded.</p></section></div>`;
@@ -539,14 +540,14 @@ VIEWS.scores = () => {
   const list = rankList(statsFor(sel, S.settings)).filter(s => s.played > 0);
   h += `<section class="card"><div class="row between"><h2>${title}</h2><span class="muted small num">${sel.length} hand${sel.length === 1 ? "" : "s"}</span></div>`;
   h += list.length ? boardRows(list, { nights: ui.scope === "all" }) : `<p class="muted">No hands recorded ${ui.scope === "today" ? "today yet" : "here"}.</p>`;
-  h += rulesNote() + `</section><div class="row"><button class="btn ghost grow" data-act="tab" data-tab="history">Hand history</button><button class="btn ghost grow" data-act="tab" data-tab="thistory">Tourney history</button></div></div>`;
+  h += rulesNote() + `</section><button class="btn ghost" data-act="tab" data-tab="history">Hand history</button></div>`;
   return h;
 };
 
-VIEWS.thistory = () => {
+function tourneyHistory() {
   const all = Object.values(S.tournaments).sort((a, b) => b.createdAt - a.createdAt);
-  let h = `<div class="stack"><div class="row between"><h2>Tourney history</h2><button class="btn link" data-act="tab" data-tab="scores">Back to scores</button></div>`;
-  if (!all.length) return h + `<section class="card empty"><h2>No tournaments yet</h2><p class="muted">Finished and running tournaments show up here with their results.</p></section></div>`;
+  let h = "";
+  if (!all.length) return `<section class="card empty"><h2>No tournaments yet</h2><p class="muted">Finished and running tournaments show up here with their results.</p></section>`;
   const wins = {};
   all.filter(T => T.stage === "done" && T.champion).forEach(T => wins[T.champion] = (wins[T.champion] || 0) + 1);
   const champs = Object.entries(wins).sort((a, b) => b[1] - a[1] || pname(a[0]).localeCompare(pname(b[0])));
@@ -565,8 +566,9 @@ VIEWS.thistory = () => {
     }
     h += `</div>`;
   }
-  return h + rulesNote() + `</div>`;
-};
+  return h + rulesNote();
+}
+VIEWS.thistory = () => { ui.tab = "scores"; ui.scope = "tourney"; return VIEWS.scores(); };
 
 VIEWS.history = () => {
   const dates = Object.keys(S.nights).filter(d => S.nights[d].hands?.length).sort().reverse();
@@ -723,7 +725,9 @@ function drawEdit() {
 // ---------- actions ----------
 const run = async (p, okMsg, undo) => {
   try { await p; if (okMsg) toast(okMsg, false, undo); }
-  catch (e) { console.error(e); toast(e?.code === "permission-denied" ? "Not allowed. That needs the admin account." : "Couldn't save: " + (e?.message || e), true); }
+  catch (e) { console.error(e); toast(e?.code === "permission-denied"
+    ? (S.isAdmin ? `The database didn't accept you as admin. Check the rules published in Firebase use ${S.user?.email}.` : "Not allowed. That needs the admin account.")
+    : "Couldn't save: " + (e?.message || e), true); }
 };
 function draftReset() { ui.winner = null; ui.from = null; ui.fan = null; }
 function buildHand(t, part) {
@@ -914,4 +918,3 @@ window.__fgd = { handDeltas, basePoints, snakeSeat, rankList, statsFor, S, ui };
 </script>
 </body>
 </html>
- 
