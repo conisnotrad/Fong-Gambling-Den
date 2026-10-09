@@ -126,6 +126,17 @@ input[type=number]{width:80px}
 .board li:nth-child(1) .rk{color:var(--jade)}
 .board .nm{font-weight:700;overflow-wrap:anywhere}
 .board .pts{font:20px/1 var(--display);font-variant-numeric:tabular-nums;text-align:right}
+.board li.tap{cursor:pointer}
+.board li.tap:hover{background:var(--surface-2)}
+.board .pts small{display:block;font:600 10.5px/1.2 var(--body);color:var(--muted);letter-spacing:.03em;text-transform:uppercase;margin-top:3px}
+.sgrid{grid-column:2/-1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:4px}
+.sgrid div{background:var(--surface-2);border-radius:8px;padding:5px 4px;text-align:center;min-width:0;border:1px solid transparent}
+.sgrid div.on{border-color:var(--jade)}
+.sgrid b{display:block;font:16px/1.1 var(--display);font-variant-numeric:tabular-nums}
+.sgrid span{font-size:10.5px;color:var(--muted);font-weight:600;white-space:nowrap}
+.sortbar{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);font-weight:600}
+.sortbar select{flex:1;padding:6px 9px}
+.sortbar .btn{padding:6px 10px;font-size:13px}
 .board .meta{grid-column:2/-1;font-size:13px;color:var(--muted)}
 .board li.cut{border-top:2px dashed var(--jade)}
 .tiebtns{display:inline-flex;gap:2px;margin-left:6px;vertical-align:middle}
@@ -278,7 +289,7 @@ function handDeltas(h, settings) {
   }
   return d;
 }
-const blankStats = id => ({ id, pts: 0, played: 0, wins: 0, selfDraws: 0, dealIns: 0, draws: 0, fanTotal: 0, bestFan: 0, nights: new Set() });
+const blankStats = id => ({ id, pts: 0, won: 0, paid: 0, played: 0, wins: 0, selfDraws: 0, dealIns: 0, draws: 0, fanTotal: 0, bestFan: 0, nights: new Set() });
 function statsFor(hands, settings, ids = []) {
   const m = {};
   const get = id => m[id] || (m[id] = blankStats(id));
@@ -287,7 +298,7 @@ function statsFor(hands, settings, ids = []) {
     (h.seats || []).forEach(p => { const s = get(p); s.played++; s.nights.add(h.night || h.date); if (h.draw) s.draws++; });
     if (h.draw || !h.winner) continue;
     const d = handDeltas(h, settings);
-    for (const p in d) get(p).pts += d[p];
+    for (const p in d) { const s = get(p); s.pts += d[p]; if (d[p] > 0) s.won += d[p]; else s.paid -= d[p]; }
     const w = get(h.winner);
     w.wins++; w.fanTotal += h.fan; w.bestFan = Math.max(w.bestFan, h.fan);
     if (h.selfDraw) w.selfDraws++;
@@ -315,7 +326,7 @@ function snakeSeat(rankedIds, nTables) {
 
 // ---------- state ----------
 const S = { ready: false, user: null, isAdmin: false, players: {}, tables: {}, nights: {}, settings: { ruleset: "uts10", selfDraw: "half" }, tournaments: {} };
-const ui = { tab: "record", tableId: lsGet("fgd-table"), winner: null, from: null, fan: null, scope: "today", date: null, histOpen: {}, histLimit: 15, confirm: null, tView: null, newT: false, d: {} };
+const ui = { tab: "record", tableId: lsGet("fgd-table"), winner: null, from: null, fan: null, scope: "today", date: null, histOpen: {}, histLimit: 15, confirm: null, tView: null, newT: false, d: {}, sort: "pts", sortDir: -1, pOpen: {}, tStat: "all" };
 const validTabs = ["record", "tables", "scores", "hands", "history", "thistory", "tourney", "rules", "settings"];
 if (validTabs.includes(location.hash.slice(1))) ui.tab = location.hash.slice(1);
 
@@ -570,6 +581,32 @@ VIEWS.tables = () => {
   return h + `</div>`;
 };
 
+// Stats players can sort the Scores boards by: [key, menu label, value shown, short label]
+const STAT_SORTS = [
+  ["pts", "Points", s => s.pts, ""],
+  ["wins", "Wins", s => s.wins, "wins"],
+  ["selfDraws", "Self-draws", s => s.selfDraws, "self-draws"],
+  ["dealIns", "Discards", s => s.dealIns, "discards"],
+  ["played", "Hands played", s => s.played, "hands"],
+  ["bestFan", "Best fan", s => s.bestFan, "best fan"],
+  ["fanTotal", "Total fan", s => s.fanTotal, "total fan"],
+  ["won", "Points won", s => s.won, "won"],
+  ["paid", "Points paid", s => s.paid, "paid"],
+];
+const sortDef = () => STAT_SORTS.find(x => x[0] === ui.sort) || STAT_SORTS[0];
+// Re-order an already-ranked list by the chosen stat; ties keep the normal ranking order
+function sortStats(list) {
+  if (ui.sort === "pts" && ui.sortDir === -1) return list;
+  const get = sortDef()[2];
+  return list.map((s, i) => [s, i]).sort((a, b) => ui.sortDir * (r2(get(a[0])) - r2(get(b[0]))) || a[1] - b[1]).map(x => x[0]);
+}
+const sortBar = () => `<div class="sortbar"><label for="sortPick">Sort by</label><select id="sortPick" data-change="sortBy">${STAT_SORTS.map(([k, l]) =>
+  `<option value="${k}" ${k === ui.sort ? "selected" : ""}>${l}</option>`).join("")}</select><button class="btn ghost" data-act="sortDir" aria-label="${ui.sortDir < 0 ? "Highest first, tap for lowest first" : "Lowest first, tap for highest first"}">${ui.sortDir < 0 ? "High ↓" : "Low ↑"}</button></div>`;
+function statGrid(s) {
+  const cell = (k, v, l, c = "") => `<div class="${ui.sort === k ? "on" : ""}"><b class="${c}">${v}</b><span>${l}</span></div>`;
+  return `<div class="sgrid">${cell("wins", s.wins, "Wins")}${cell("selfDraws", s.selfDraws, "Self-draw")}${cell("dealIns", s.dealIns, "Discards")}${cell("played", s.played, "Hands")}
+    ${cell("bestFan", s.bestFan || "–", "Best fan")}${cell("fanTotal", s.fanTotal, "Total fan")}${cell("won", "+" + num(s.won), "Won", "pos")}${cell("paid", "−" + num(s.paid), "Paid", "neg")}</div>`;
+}
 function boardRows(list, opts = {}) {
   return `<ul class="board">${list.map((s, i) => {
     const tieUp = opts.tie && i > 0 && sameMetrics(list[i - 1], s);
@@ -577,7 +614,13 @@ function boardRows(list, opts = {}) {
     const meta = [`${s.wins} win${s.wins === 1 ? "" : "s"}`, `${s.selfDraws} self-draw${s.selfDraws === 1 ? "" : "s"}`, `${s.dealIns} discard${s.dealIns === 1 ? "" : "s"}`,
       s.bestFan ? `best ${s.bestFan} fan` : "", opts.tie ? `${s.fanTotal} fan total` : "", `${s.played} hand${s.played === 1 ? "" : "s"}`, opts.nights ? `${s.nights.size} night${s.nights.size === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
     const tieCtl = (tieUp || tieDown) ? ` <span class="badge warn">tied</span>` + (S.isAdmin && opts.T ? `<span class="tiebtns">${tieUp ? `<button data-act="tieSwap" data-t="${opts.T.id}" data-stage="${opts.stage}" data-i="${i}" data-dir="-1" aria-label="Move up">▲</button>` : ""}${tieDown ? `<button data-act="tieSwap" data-t="${opts.T.id}" data-stage="${opts.stage}" data-i="${i}" data-dir="1" aria-label="Move down">▼</button>` : ""}</span>` : "") : "";
-    return `<li class="${opts.cut && i === opts.cut ? "cut" : ""}"><span class="rk">${i + 1}</span><span class="nm">${esc(pname(s.id))}${tieCtl}</span><span class="pts ${cls(s.pts)}">${fmt(s.pts)}</span><span class="meta">${meta}</span></li>`;
+    if (!opts.full) return `<li class="${opts.cut && i === opts.cut ? "cut" : ""}"><span class="rk">${i + 1}</span><span class="nm">${esc(pname(s.id))}${tieCtl}</span><span class="pts ${cls(s.pts)}">${fmt(s.pts)}</span><span class="meta">${meta}</span></li>`;
+    // Scores boards: tap a player to open their stats; the big number shows whatever the board is sorted by
+    const key = opts.full + ":" + s.id, open = !!ui.pOpen[key], [sk, , get, lab] = sortDef();
+    const big = sk === "pts" ? `<span class="pts ${cls(s.pts)}">${fmt(s.pts)}</span>`
+      : `<span class="pts ${sk === "won" ? "pos" : sk === "paid" ? "neg" : ""}">${sk === "won" ? "+" : sk === "paid" ? "−" : ""}${num(get(s))}<small>${lab}</small></span>`;
+    return `<li class="tap" data-act="pOpen" data-key="${esc(key)}" role="button" tabindex="0" aria-expanded="${open}"><span class="rk">${i + 1}</span><span class="nm">${esc(pname(s.id))}</span>${big}${open ? statGrid(s)
+      : `<span class="meta">${meta} · <span class="pos">+${num(s.won)}</span> / <span class="neg">−${num(s.paid)}</span>${sk !== "pts" ? ` · net <span class="${cls(s.pts)}">${fmt(s.pts)}</span>` : ""}</span>`}</li>`;
   }).join("")}</ul>`;
 }
 const rulesNote = () => `<p class="muted small">Scored with ${esc(RULESETS[S.settings.ruleset]?.name)}; self-draw: ${esc((SELF_DRAW[S.settings.selfDraw] || SELF_DRAW.half).name.toLowerCase())}.</p>`;
@@ -604,7 +647,8 @@ VIEWS.scores = () => {
   }
   const list = rankList(statsFor(sel, S.settings)).filter(s => s.played > 0);
   h += `<section class="card"><div class="row between"><h2>${title}</h2><span class="muted small num">${sel.length} hand${sel.length === 1 ? "" : "s"}</span></div>`;
-  h += list.length ? boardRows(list, { nights: ui.scope === "all" }) : `<p class="muted">No hands recorded ${ui.scope === "today" ? (curNight() ? "tonight yet" : "yet. The admin begins each game night") : "here"}.</p>`;
+  if (list.length) h += sortBar();
+  h += list.length ? boardRows(sortStats(list), { nights: ui.scope === "all", full: ui.scope }) + `<p class="muted small">Tap a player for their full stats.</p>` : `<p class="muted">No hands recorded ${ui.scope === "today" ? (curNight() ? "tonight yet" : "yet. The admin begins each game night") : "here"}.</p>`;
   h += rulesNote() + `</section></div>`;
   return h;
 };
@@ -618,6 +662,16 @@ function tourneyHistory() {
   const champs = Object.entries(wins).sort((a, b) => b[1] - a[1] || pname(a[0]).localeCompare(pname(b[0])));
   if (champs.length) h += `<section class="card"><h3>Tournament wins</h3><ul class="board">${champs.map(([id, n], i) =>
     `<li><span class="rk">${i + 1}</span><span class="nm">${esc(pname(id))}</span><span class="pts num">${n}</span></li>`).join("")}</ul></section>`;
+  // Player stats counting tournament hands only (all tournaments, or one picked)
+  if (ui.tStat !== "all" && !S.tournaments[ui.tStat]) ui.tStat = "all";
+  const tsel = ui.tStat === "all" ? allHands().filter(x => x.tournamentId && S.tournaments[x.tournamentId]) : tHands(S.tournaments[ui.tStat]);
+  const tlist = rankList(statsFor(tsel, S.settings)).filter(s => s.played > 0);
+  h += `<section class="card"><div class="row between"><h2>Tournament stats</h2><span class="muted small num">${tsel.length} hand${tsel.length === 1 ? "" : "s"}</span></div>
+    <select id="tStatPick" data-change="tStat" aria-label="Which tournament">${[["all", "All tournaments"], ...all.map(T => [T.id, `${T.name} · ${niceDate(T.date)}`])].map(([k, l]) =>
+      `<option value="${esc(k)}" ${k === ui.tStat ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+    <p class="muted small">Counts tournament hands only${ui.tStat === "all" ? "" : ", qualifying and final together"}.</p>`;
+  h += tlist.length ? sortBar() + boardRows(sortStats(tlist), { full: "t-" + ui.tStat }) + `<p class="muted small">Tap a player for their full stats.</p>` : `<p class="muted">No tournament hands recorded yet.</p>`;
+  h += `</section>`;
   for (const T of all) {
     const open = ui.tOpen?.[T.id] ?? false;
     const handCount = tHands(T).length;
@@ -854,13 +908,15 @@ const ruleRow = (name, f, desc, eg) => `<li>${ftile(f)}<div class="rd"><b>${esc(
 VIEWS.rules = () => {
   const rs = S.settings.ruleset, sd = S.settings.selfDraw;
   const m = (SELF_DRAW[sd] || SELF_DRAW.half).mult;
-  let h = `<div class="stack"><div class="jump">${[["r-hands", "Winning hands"], ["r-house", "House rules"], ["r-extra", "Extra fan"], ["r-points", "Scoring"]].map(([id, l]) =>
+  let h = `<div class="stack"><div class="jump">${[["r-hands", "Winning hands"], ["r-extra", "Extra fan"], ["r-house", "House rules"], ["r-points", "Scoring"]].map(([id, l]) =>
       `<button class="chip" data-act="jump" data-to="${id}">${l}</button>`).join("")}</div>`;
 
   h += `<section class="card" id="r-hands"><h2>Winning hands</h2>
     <p>You need at least <b>${MIN_FAN} fan</b> to win. Add up your winning hand and any extra fan. Limit hands, and anything that adds up past the limit, score <b>${LIMIT_FAN} fan</b>.</p>
     <p class="muted small">Example hands show 萬 characters, 筒 dots, 索 bamboo, winds 東南西北, and dragons: red 中, green 發 and white (blue box). A tile after a dashed line is the winning tile.</p>
     <ul class="rules">${WIN_HANDS.map(([n, f, d, e]) => ruleRow(n, f, d, e)).join("")}</ul></section>`;
+
+  h += `<section class="card" id="r-extra"><h2>Extra fan</h2><p class="muted small">Added on top of your winning hand.</p><ul class="rules">${EXTRA_FAN.map(([n, f, d]) => ruleRow(n, f, d)).join("")}</ul></section>`;
 
   h += `<section class="card house" id="r-house"><h2>House rules</h2>
     <h3>Kongs</h3>
@@ -880,8 +936,6 @@ VIEWS.rules = () => {
       <li>A pong (triplet) or kong (quad) takes priority over a seung (sequence/chow), unless the seung is for the win.</li>
       <li>A seung can be taken from anyone if it's for the win.</li>
     </ul></section>`;
-
-  h += `<section class="card" id="r-extra"><h2>Extra fan</h2><p class="muted small">Added on top of your winning hand.</p><ul class="rules">${EXTRA_FAN.map(([n, f, d]) => ruleRow(n, f, d)).join("")}</ul></section>`;
 
   h += `<section class="card" id="r-points"><h2>Scoring rules</h2>`;
   if (S.isAdmin) h += `<div class="fields"><label>Ruleset<select id="rsPick" data-change="ruleset">${Object.entries(RULESETS).map(([k, v]) => `<option value="${k}" ${k === rs ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></label>
@@ -989,6 +1043,8 @@ const A = {
   async unseat(d) { const t = S.tables[d.t]; await run(store.updateTable(t.id, { seats: t.seats.filter(p => p !== d.id) })); },
   async closeTable(d) { if (!S.isAdmin) return toast("Only the admin can close tables.", true); await run(store.updateTable(d.t, { open: false }), "Table closed"); },
   scope(d) { ui.scope = d.scope; },
+  pOpen(d) { ui.pOpen[d.key] = !ui.pOpen[d.key]; },
+  sortDir() { ui.sortDir = -ui.sortDir; },
   toggleNight(d) { ui.histOpen[d.d] = !(ui.histOpen[d.d] ?? d.d === curNight()?.id); },
   async beginNight() { await run(ensureNight(), "Game night started"); },
   async endNight() {
@@ -1131,6 +1187,8 @@ const CHANGES = {
     await run(store.updateTable(t.id, { seats: [...t.seats, pid].slice(0, 4) }));
   },
   night(el) { ui.date = el.value; },
+  sortBy(el) { ui.sort = el.value; ui.sortDir = el.value === "dealIns" || el.value === "paid" ? 1 : -1; },
+  tStat(el) { ui.tStat = el.value; },
   async ruleset(el) { await run(store.setSettings({ ruleset: el.value }), `Now scoring with ${RULESETS[el.value].name}`); },
   async selfDraw(el) { await run(store.setSettings({ selfDraw: el.value }), "Self-draw rule updated"); },
   tPlayer(el) { const s = new Set(ui.d.tPlayers || []); el.checked ? s.add(el.value) : s.delete(el.value); ui.d.tPlayers = [...s]; },
@@ -1155,6 +1213,7 @@ document.addEventListener("change", async ev => {
 });
 document.addEventListener("input", ev => { const el = ev.target; if (el.dataset?.model) ui.d[el.dataset.model] = el.value; });
 document.addEventListener("keydown", ev => {
+  if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches?.('li[role="button"][data-act]')) { ev.preventDefault(); ev.target.click(); return; }
   if (ev.key === "Escape" && ui.edit) { modal.innerHTML = ""; ui.edit = null; }
   if (ev.key === "Enter" && ev.target.dataset?.model) {
     const m = ev.target.dataset.model;
