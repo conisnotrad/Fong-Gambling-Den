@@ -175,6 +175,18 @@ input[type=number]{width:80px}
 .ftile.limit small{color:#d8efe6}
 #r-house,#r-hands,#r-extra,#r-points{scroll-margin-top:76px}
 .house{border-left:4px solid var(--jade)}
+.eg{display:flex;flex-wrap:wrap;gap:6px 8px;margin-top:7px}
+.eg .grp{display:inline-flex;gap:2px}
+.eg .grp.win{padding-left:8px;border-left:2px dashed var(--line);align-items:flex-end}
+.mt{width:22px;height:30px;flex:none;background:var(--tile);color:var(--tile-ink);border:1px solid #c9c4b2;border-bottom:3px solid var(--tile-edge);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;font-family:var(--display)}
+.mt i{font-style:normal;font-size:13px}
+.mt u{text-decoration:none;font-size:9px;margin-top:1px;font-family:var(--body);font-weight:700}
+.mt.m u{color:#b3261e} .mt.p u{color:#1f5fa8} .mt.s u{color:#127a4c}
+.mt.h i{font-size:15px}
+.mt.red i{color:#c0261c} .mt.grn i{color:#127a4c}
+.mt.wht::after{content:"";width:12px;height:17px;border:2px solid #1f5fa8;border-radius:2px}
+.mt.fl i{font-size:13px;color:#a24a00} .mt.fl u{color:#6b6b6b}
+.mt.lucky{box-shadow:0 0 0 2px var(--jade)}
 .house ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .house ul ul{margin-top:6px}
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:9;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:12px;font-weight:600;max-width:calc(100% - 32px);display:flex;gap:12px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.25)}
@@ -464,7 +476,7 @@ function statusPill() {
   return `<span id="status" class="pill">${S.user ? "Live" : "Connecting…"}</span>`;
 }
 function renderTabs() {
-  const tabs = [["record", "胡", "Record"], ["tables", "桌", "Tables"], ["scores", "分", "Scores"], ["hands", "牌", "Hands"], ["tourney", "賽", "Tourney"], ["rules", "規", "Rules"], ["settings", "設", "More"]];
+  const tabs = [["record", "胡", "Record"], ["tables", "桌", "Tables"], ["scores", "分", "Scores"], ["hands", "牌", "Hands"], ["tourney", "賽", "Tourney"], ["rules", "規", "Rules"], ["settings", "管", "Admin"]];
   const cur = ui.tab === "thistory" ? "scores" : ui.tab === "history" ? "hands" : ui.tab;
   document.getElementById("tabs").innerHTML = tabs.map(([k, ic, l]) =>
     `<button class="${cur === k ? "on" : ""}" data-act="tab" data-tab="${k}" ${cur === k ? 'aria-current="page"' : ""}><span class="ic" aria-hidden="true">${ic}</span>${l}</button>`).join("");
@@ -554,7 +566,7 @@ VIEWS.tables = () => {
     else if (S.isAdmin) h += `<div>${confirmBtn("close:" + t.id, "Close table", "Tap again to close " + esc(t.name), "closeTable", `data-t="${t.id}"`)}</div>`;
     h += `</section>`;
   }
-  if (!activePlayers().length) h += `<p class="note warn">There are no players yet. The admin adds players under More.</p>`;
+  if (!activePlayers().length) h += `<p class="note warn">There are no players yet. The admin adds players on the Admin tab.</p>`;
   return h + `</div>`;
 };
 
@@ -681,7 +693,7 @@ function newTournamentForm() {
   return `<section class="card"><h2>New tournament</h2>
     <input type="text" id="tName" data-model="tName" placeholder="Tournament ${niceDate(sydDate(Date.now()))}" value="${esc(ui.d.tName || "")}" maxlength="60" aria-label="Tournament name">
     <div class="label">Players · ${n} picked</div>
-    <div class="checks">${ps.map(p => `<label><input type="checkbox" data-change="tPlayer" value="${p.id}" ${chosen.includes(p.id) ? "checked" : ""}>${esc(p.name)}</label>`).join("") || `<p class="muted">Add players under More first.</p>`}</div>
+    <div class="checks">${ps.map(p => `<label><input type="checkbox" data-change="tPlayer" value="${p.id}" ${chosen.includes(p.id) ? "checked" : ""}>${esc(p.name)}</label>`).join("") || `<p class="muted">Add players on the Admin tab first.</p>`}</div>
     <div class="fields">
       <label>Hands per round<input type="number" id="tHpr" data-model="tHpr" min="1" max="99" value="${esc(ui.d.tHpr ?? 4)}"></label>
       <label>Qualifying rounds<input type="number" id="tQr" data-model="tQr" min="1" max="20" value="${esc(ui.d.tQr ?? 3)}"></label>
@@ -749,18 +761,8 @@ function tournamentAdmin(T) {
 }
 
 VIEWS.settings = () => {
-  const rs = S.settings.ruleset, sd = S.settings.selfDraw;
-  const m = (SELF_DRAW[sd] || SELF_DRAW.half).mult;
   let h = `<div class="stack">`;
   if (DEMO) h += `<section class="note warn"><b>Demo mode.</b> Sample data stays on this device only. Fill in your Firebase details (SETUP.md) to share it with everyone. <button class="btn link" data-act="arm" data-key="reset">Reset demo data</button>${ui.confirm === "reset" ? ` <button class="btn danger" data-act="resetDemo">Tap to reset</button>` : ""}</section>`;
-  h += `<section class="card"><h2>Scoring rules</h2>`;
-  if (S.isAdmin) h += `<div class="fields"><label>Ruleset<select id="rsPick" data-change="ruleset">${Object.entries(RULESETS).map(([k, v]) => `<option value="${k}" ${k === rs ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></label>
-      <label>Self-draw<select id="sdPick" data-change="selfDraw">${Object.entries(SELF_DRAW).map(([k, v]) => `<option value="${k}" ${k === sd ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></label></div>
-      <p class="muted small">Changing either setting recalculates every score, daily and all-time.</p>`;
-  else h += `<p><b>${esc(RULESETS[rs]?.name)}</b> · self-draw: ${esc((SELF_DRAW[sd] || SELF_DRAW.half).name.toLowerCase())}</p>`;
-  h += `<div class="scroll"><table class="fantable"><thead><tr><th>Fan</th><th>Discarder pays</th><th>Self-draw, each pays</th><th>Self-draw, winner gets</th></tr></thead><tbody>${fanRange().map(f => { const b = basePoints(f, rs);
-    return `<tr><td>${f}</td><td>${num(b)}</td><td>${num(b * m)}</td><td>${num(b * m * 3)}</td></tr>`; }).join("")}</tbody></table></div></section>`;
-
   h += `<section class="card"><h2>Players</h2>`;
   const ps = Object.values(S.players).sort((a, b) => a.name.localeCompare(b.name));
   if (S.isAdmin) {
@@ -785,27 +787,27 @@ VIEWS.settings = () => {
 // ---------- Rules tab: winning hands, extra fan and house clarifications (Sydney Uni HK Mahjong fan list, adapted from Mahjong@UTS) ----------
 const LIMIT_FAN = 13;
 const WIN_HANDS = [
-  ["All Chows", 1, "Four chows (sequences) and a pair from any suit. The pair can be honours."],
-  ["All Terminals and Honours", 2, "Pongs/kongs of only 1s, 9s and honour tiles."],
-  ["All Pongs", 3, "Four pongs/kongs and a pair of any tile."],
-  ["Half Flush", 3, "Four pongs/kongs/chows and a pair, using one suit plus honours."],
-  ["Little Three Dragons", 5, "Pongs/kongs of two dragons, with the third dragon as the pair. The other sets can be any pong/kong/chow."],
-  ["Full Flush", 7, "Pongs/kongs/chows and a pair from one suit only, no honours."],
-  ["Big Three Dragons", 8, "Pongs/kongs of all three dragons, plus one more pong/kong/chow and a pair of any tile."],
-  ["Jade Dragon", 10, "Only pongs/kongs of bamboo tiles, plus a pong of the green dragon."],
-  ["Pearl Dragon", 10, "Only pongs/kongs of dot tiles, plus a pong of the white dragon."],
-  ["Ruby Dragon", 10, "Only pongs/kongs of character tiles, plus a pong of the red dragon."],
-  ["Little Four Winds", 0, "Pongs/kongs of three winds, with the fourth wind as the pair. The last set can be any pong/kong/chow."],
-  ["Big Four Winds", 0, "Pongs/kongs of all four winds and a pair of any tile."],
-  ["All Honours", 0, "Pongs/kongs of honour tiles only."],
-  ["All Terminals", 0, "Pongs/kongs of only 1s and 9s."],
-  ["All Kongs", 0, "Four kongs and a pair."],
-  ["Nine Gates", 0, "Three 1s, three 9s and one of every other number, all in one suit. The 14th tile can be any tile of that suit. Must be self-drawn and concealed."],
-  ["Thirteen Orphans", 0, "A 1 and a 9 from each suit plus one of every honour tile. The 14th tile is any of those 13, making a pair."],
-  ["Hidden Treasures", 0, "Only concealed pongs/kongs and a pair (no tiles taken from other players). Must be self-drawn."],
-  ["All 8 Flowers", 0, "All eight flowers and seasons to yourself. You still need four sets and a pair to win."],
-  ["Heavenly Hand", 0, "East wins with their initial hand."],
-  ["Earthly Hand", 0, "A non-East player wins off East's first discard."],
+  ["All Chows", 1, "Four chows (sequences) and a pair from any suit. The pair can be honours.", "123m 456p 789s 345s 11z"],
+  ["All Terminals and Honours", 2, "Pongs/kongs of only 1s, 9s and honour tiles.", "111m 999p 999s 777z 11z"],
+  ["All Pongs", 3, "Four pongs/kongs and a pair of any tile.", "222m 555p 888s 333z 99p"],
+  ["Half Flush", 3, "Four pongs/kongs/chows and a pair, using one suit plus honours.", "123p 456p 999p 222z 66z"],
+  ["Little Three Dragons", 5, "Pongs/kongs of two dragons, with the third dragon as the pair. The other sets can be any pong/kong/chow.", "555z 666z 77z 123m 456p"],
+  ["Full Flush", 7, "Pongs/kongs/chows and a pair from one suit only, no honours.", "123s 345s 678s 999s 22s"],
+  ["Big Three Dragons", 8, "Pongs/kongs of all three dragons, plus one more pong/kong/chow and a pair of any tile.", "555z 666z 777z 234m 88p"],
+  ["Jade Dragon", 10, "Only pongs/kongs of bamboo tiles, plus a pong of the green dragon.", "222s 444s 888s 666z 55s"],
+  ["Pearl Dragon", 10, "Only pongs/kongs of dot tiles, plus a pong of the white dragon.", "111p 333p 777p 555z 99p"],
+  ["Ruby Dragon", 10, "Only pongs/kongs of character tiles, plus a pong of the red dragon.", "222m 666m 999m 777z 44m"],
+  ["Little Four Winds", 0, "Pongs/kongs of three winds, with the fourth wind as the pair. The last set can be any pong/kong/chow.", "111z 222z 333z 44z 789m"],
+  ["Big Four Winds", 0, "Pongs/kongs of all four winds and a pair of any tile.", "111z 222z 333z 444z 55p"],
+  ["All Honours", 0, "Pongs/kongs of honour tiles only.", "111z 333z 555z 777z 22z"],
+  ["All Terminals", 0, "Pongs/kongs of only 1s and 9s.", "111m 999m 111p 999s 11s"],
+  ["All Kongs", 0, "Four kongs and a pair.", "3333m 7777p 2222s 1111z 99m"],
+  ["Nine Gates", 0, "Three 1s, three 9s and one of every other number, all in one suit. The 14th tile can be any tile of that suit. Must be self-drawn and concealed.", "1112345m 678999m +5m"],
+  ["Thirteen Orphans", 0, "A 1 and a 9 from each suit plus one of every honour tile. The 14th tile is any of those 13, making a pair.", "19m 19p 19s 1234z 567z +1m"],
+  ["Hidden Treasures", 0, "Only concealed pongs/kongs and a pair (no tiles taken from other players). Must be self-drawn.", "222m 555p 888s 444z 33m"],
+  ["All 8 Flowers", 0, "All eight flowers and seasons to yourself. You still need four sets and a pair to win.", "1234f 1234q"],
+  ["Heavenly Hand", 0, "East wins with their initial hand.", ""],
+  ["Earthly Hand", 0, "A non-East player wins off East's first discard.", ""],
 ];
 const EXTRA_FAN = [
   ["Pong/Kong of Dragons", "1", ""],
@@ -826,18 +828,41 @@ const EXTRA_FAN = [
 const ftile = (f) => f === 0 || f === LIMIT_FAN
   ? `<span class="ftile limit" aria-label="Limit, ${LIMIT_FAN} fan"><b>${LIMIT_FAN}</b><small>Limit</small></span>`
   : `<span class="ftile" aria-label="${f} fan"><b>${esc(f)}</b><small>fan</small></span>`;
-const ruleRow = (name, f, desc) => `<li>${ftile(f)}<div class="rd"><b>${esc(name)}</b>${desc ? `<span>${esc(desc)}</span>` : ""}</div></li>`;
+// Example hands use a short code: digits + suit letter. m = characters (萬), p = dots (筒), s = bamboo (索),
+// z = honours (1-4 East South West North, 5 White, 6 Green, 7 Red), f = flowers, q = seasons. "+" marks the winning tile.
+const HONOURS = [["東", ""], ["南", ""], ["西", ""], ["北", ""], ["", "wht"], ["發", "grn"], ["中", "red"]];
+const FLOWERS = { f: ["梅", "蘭", "菊", "竹"], q: ["春", "夏", "秋", "冬"] };
+const SUITS = { m: "萬", p: "筒", s: "索" };
+const NUMS = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const NAMES = { m: "characters", p: "dots", s: "bamboo" };
+const HNAMES = ["East", "South", "West", "North", "White dragon", "Green dragon", "Red dragon"];
+function mjTile(d, suit, win) {
+  const n = +d, x = win ? " lucky" : "";
+  if (suit === "z") { const [c, k] = HONOURS[n - 1]; return `<span class="mt h ${k}${x}" title="${HNAMES[n - 1]}"><i>${c}</i></span>`; }
+  if (FLOWERS[suit]) return `<span class="mt fl${x}" title="${suit === "f" ? "Flower" : "Season"} ${n}"><i>${FLOWERS[suit][n - 1]}</i><u>${n}</u></span>`;
+  return `<span class="mt ${suit}${x}" title="${n} ${NAMES[suit]}"><i>${NUMS[n - 1]}</i><u>${SUITS[suit]}</u></span>`;
+}
+function exampleHand(code) {
+  if (!code) return "";
+  return `<div class="eg" aria-label="Example hand">${code.split(" ").map(g => {
+    const win = g.startsWith("+"), suit = g.slice(-1), ds = g.replace("+", "").slice(0, -1);
+    return `<span class="grp${win ? " win" : ""}">${[...ds].map(d => mjTile(d, suit, win)).join("")}</span>`;
+  }).join("")}</div>`;
+}
+const ruleRow = (name, f, desc, eg) => `<li>${ftile(f)}<div class="rd"><b>${esc(name)}</b>${desc ? `<span>${esc(desc)}</span>` : ""}${exampleHand(eg)}</div></li>`;
 
 VIEWS.rules = () => {
   const rs = S.settings.ruleset, sd = S.settings.selfDraw;
   const m = (SELF_DRAW[sd] || SELF_DRAW.half).mult;
-  let h = `<div class="stack">`;
-  h += `<section class="card"><h2>How to win</h2>
-    <p>You need at least <b>${MIN_FAN} fan</b> to win. Add up your winning hand and any extra fan. Limit hands, and anything that adds up past the limit, score <b>${LIMIT_FAN} fan</b>.</p>
-    <div class="jump">${[["r-house", "House rules"], ["r-hands", "Winning hands"], ["r-extra", "Extra fan"], ["r-points", "Points"]].map(([id, l]) =>
-      `<button class="chip" data-act="jump" data-to="${id}">${l}</button>`).join("")}</div></section>`;
+  let h = `<div class="stack"><div class="jump">${[["r-hands", "Winning hands"], ["r-house", "House rules"], ["r-extra", "Extra fan"], ["r-points", "Scoring"]].map(([id, l]) =>
+      `<button class="chip" data-act="jump" data-to="${id}">${l}</button>`).join("")}</div>`;
 
-  h += `<section class="card house" id="r-house"><h2>Rule clarifications</h2>
+  h += `<section class="card" id="r-hands"><h2>Winning hands</h2>
+    <p>You need at least <b>${MIN_FAN} fan</b> to win. Add up your winning hand and any extra fan. Limit hands, and anything that adds up past the limit, score <b>${LIMIT_FAN} fan</b>.</p>
+    <p class="muted small">Example hands show 萬 characters, 筒 dots, 索 bamboo, winds 東南西北, and dragons: red 中, green 發 and white (blue box). A tile after a dashed line is the winning tile.</p>
+    <ul class="rules">${WIN_HANDS.map(([n, f, d, e]) => ruleRow(n, f, d, e)).join("")}</ul></section>`;
+
+  h += `<section class="card house" id="r-house"><h2>House rules</h2>
     <h3>Kongs</h3>
     <ul>
       <li>A kong can be declared at any time.</li>
@@ -856,11 +881,14 @@ VIEWS.rules = () => {
       <li>A seung can be taken from anyone if it's for the win.</li>
     </ul></section>`;
 
-  h += `<section class="card" id="r-hands"><h2>Winning hands</h2><ul class="rules">${WIN_HANDS.map(([n, f, d]) => ruleRow(n, f, d)).join("")}</ul></section>`;
   h += `<section class="card" id="r-extra"><h2>Extra fan</h2><p class="muted small">Added on top of your winning hand.</p><ul class="rules">${EXTRA_FAN.map(([n, f, d]) => ruleRow(n, f, d)).join("")}</ul></section>`;
 
-  h += `<section class="card" id="r-points"><h2>Points per fan</h2>
-    <p class="muted small">Scored with <b>${esc(RULESETS[rs]?.name)}</b>. The discarder pays the full amount. On a self-draw, ${m === 1 ? "each other player pays the full amount" : "each other player pays half"}.</p>
+  h += `<section class="card" id="r-points"><h2>Scoring rules</h2>`;
+  if (S.isAdmin) h += `<div class="fields"><label>Ruleset<select id="rsPick" data-change="ruleset">${Object.entries(RULESETS).map(([k, v]) => `<option value="${k}" ${k === rs ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></label>
+      <label>Self-draw<select id="sdPick" data-change="selfDraw">${Object.entries(SELF_DRAW).map(([k, v]) => `<option value="${k}" ${k === sd ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></label></div>
+      <p class="muted small">Changing either setting recalculates every score, daily and all-time.</p>`;
+  else h += `<p><b>${esc(RULESETS[rs]?.name)}</b> · self-draw: ${esc((SELF_DRAW[sd] || SELF_DRAW.half).name.toLowerCase())}</p>`;
+  h += `<p class="muted small">The discarder pays the full amount. On a self-draw, ${m === 1 ? "each other player pays the full amount" : "each other player pays half"}.</p>
     <div class="scroll"><table class="fantable"><thead><tr><th>Fan</th><th>Discarder pays</th><th>Self-draw, each pays</th><th>Self-draw, winner gets</th></tr></thead><tbody>${fanRange().map(f => { const b = basePoints(f, rs);
       return `<tr><td>${f}${f === LIMIT_FAN ? " (limit)" : ""}</td><td>${num(b)}</td><td>${num(b * m)}</td><td>${num(b * m * 3)}</td></tr>`; }).join("")}</tbody></table></div></section>`;
   return h + `</div>`;
