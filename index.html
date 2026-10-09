@@ -155,12 +155,28 @@ input[type=number]{width:80px}
 .fields label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);font-weight:600}
 
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--surface);border-top:1px solid var(--line);padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px))}
-.tabs-in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(6,1fr);gap:2px}
-.tabs button{border:0;background:transparent;border-radius:10px;padding:6px 2px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11.5px;font-weight:600;color:var(--muted)}
+.tabs-in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.tabs button{border:0;background:transparent;border-radius:10px;padding:6px 0;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;min-width:0;font-weight:600;color:var(--muted)}
 .tabs button .ic{font:17px/1 var(--display);width:30px;height:26px;display:grid;place-items:center;border-radius:7px}
 .tabs button.on{color:var(--jade)}
 .tabs button.on .ic{background:var(--jade);color:var(--jade-ink)}
 
+.jump{display:flex;flex-wrap:wrap;gap:8px}
+.rules{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.rules li{display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--line)}
+.rules li:first-child{border-top:0}
+.rules .rd{flex:1;min-width:0}
+.rules .rd b{display:block}
+.rules .rd span{font-size:14px;color:var(--muted)}
+.ftile{flex:none;width:40px;min-height:46px;background:var(--tile);color:var(--tile-ink);border:1px solid var(--line);border-bottom:5px solid var(--tile-edge);border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3px 0}
+.ftile b{font:18px/1 var(--display)}
+.ftile small{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#5a6b63}
+.ftile.limit{background:var(--jade);color:#fff;border-bottom-color:#08402f}
+.ftile.limit small{color:#d8efe6}
+#r-house,#r-hands,#r-extra,#r-points{scroll-margin-top:76px}
+.house{border-left:4px solid var(--jade)}
+.house ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+.house ul ul{margin-top:6px}
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:9;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:12px;font-weight:600;max-width:calc(100% - 32px);display:flex;gap:12px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.25)}
 #toast.err{background:var(--neg);color:#fff}
 #toast button{border:0;background:transparent;color:inherit;text-decoration:underline;font-weight:700}
@@ -288,7 +304,7 @@ function snakeSeat(rankedIds, nTables) {
 // ---------- state ----------
 const S = { ready: false, user: null, isAdmin: false, players: {}, tables: {}, nights: {}, settings: { ruleset: "uts10", selfDraw: "half" }, tournaments: {} };
 const ui = { tab: "record", tableId: lsGet("fgd-table"), winner: null, from: null, fan: null, scope: "today", date: null, histOpen: {}, histLimit: 15, confirm: null, tView: null, newT: false, d: {} };
-const validTabs = ["record", "tables", "scores", "hands", "history", "thistory", "tourney", "settings"];
+const validTabs = ["record", "tables", "scores", "hands", "history", "thistory", "tourney", "rules", "settings"];
 if (validTabs.includes(location.hash.slice(1))) ui.tab = location.hash.slice(1);
 
 const pname = id => S.players[id]?.name || "Unknown player";
@@ -448,7 +464,7 @@ function statusPill() {
   return `<span id="status" class="pill">${S.user ? "Live" : "Connecting…"}</span>`;
 }
 function renderTabs() {
-  const tabs = [["record", "胡", "Record"], ["tables", "桌", "Tables"], ["scores", "分", "Scores"], ["hands", "牌", "Hands"], ["tourney", "賽", "Tourney"], ["settings", "設", "More"]];
+  const tabs = [["record", "胡", "Record"], ["tables", "桌", "Tables"], ["scores", "分", "Scores"], ["hands", "牌", "Hands"], ["tourney", "賽", "Tourney"], ["rules", "規", "Rules"], ["settings", "設", "More"]];
   const cur = ui.tab === "thistory" ? "scores" : ui.tab === "history" ? "hands" : ui.tab;
   document.getElementById("tabs").innerHTML = tabs.map(([k, ic, l]) =>
     `<button class="${cur === k ? "on" : ""}" data-act="tab" data-tab="${k}" ${cur === k ? 'aria-current="page"' : ""}><span class="ic" aria-hidden="true">${ic}</span>${l}</button>`).join("");
@@ -766,6 +782,90 @@ VIEWS.settings = () => {
   return h;
 };
 
+// ---------- Rules tab: winning hands, extra fan and house clarifications (Sydney Uni HK Mahjong fan list, adapted from Mahjong@UTS) ----------
+const LIMIT_FAN = 13;
+const WIN_HANDS = [
+  ["All Chows", 1, "Four chows (sequences) and a pair from any suit. The pair can be honours."],
+  ["All Terminals and Honours", 2, "Pongs/kongs of only 1s, 9s and honour tiles."],
+  ["All Pongs", 3, "Four pongs/kongs and a pair of any tile."],
+  ["Half Flush", 3, "Four pongs/kongs/chows and a pair, using one suit plus honours."],
+  ["Little Three Dragons", 5, "Pongs/kongs of two dragons, with the third dragon as the pair. The other sets can be any pong/kong/chow."],
+  ["Full Flush", 7, "Pongs/kongs/chows and a pair from one suit only, no honours."],
+  ["Big Three Dragons", 8, "Pongs/kongs of all three dragons, plus one more pong/kong/chow and a pair of any tile."],
+  ["Jade Dragon", 10, "Only pongs/kongs of bamboo tiles, plus a pong of the green dragon."],
+  ["Pearl Dragon", 10, "Only pongs/kongs of dot tiles, plus a pong of the white dragon."],
+  ["Ruby Dragon", 10, "Only pongs/kongs of character tiles, plus a pong of the red dragon."],
+  ["Little Four Winds", 0, "Pongs/kongs of three winds, with the fourth wind as the pair. The last set can be any pong/kong/chow."],
+  ["Big Four Winds", 0, "Pongs/kongs of all four winds and a pair of any tile."],
+  ["All Honours", 0, "Pongs/kongs of honour tiles only."],
+  ["All Terminals", 0, "Pongs/kongs of only 1s and 9s."],
+  ["All Kongs", 0, "Four kongs and a pair."],
+  ["Nine Gates", 0, "Three 1s, three 9s and one of every other number, all in one suit. The 14th tile can be any tile of that suit. Must be self-drawn and concealed."],
+  ["Thirteen Orphans", 0, "A 1 and a 9 from each suit plus one of every honour tile. The 14th tile is any of those 13, making a pair."],
+  ["Hidden Treasures", 0, "Only concealed pongs/kongs and a pair (no tiles taken from other players). Must be self-drawn."],
+  ["All 8 Flowers", 0, "All eight flowers and seasons to yourself. You still need four sets and a pair to win."],
+  ["Heavenly Hand", 0, "East wins with their initial hand."],
+  ["Earthly Hand", 0, "A non-East player wins off East's first discard."],
+];
+const EXTRA_FAN = [
+  ["Pong/Kong of Dragons", "1", ""],
+  ["Pong/Kong of your own seat wind", "1", ""],
+  ["Pong/Kong of the round wind", "1", ""],
+  ["Flower of your own seat", "1", ""],
+  ["Season of your own seat", "1", ""],
+  ["All Flowers", "1+1", "1 fan, plus 1 more for the flower of your own seat."],
+  ["All Seasons", "1+1", "1 fan, plus 1 more for the season of your own seat."],
+  ["No Flowers or Seasons", "1", ""],
+  ["Self-Draw", "1", ""],
+  ["Self-Draw off the last tile of the wall", "1+1", "Win on the last tile drawn in the game. 1 fan, plus 1 for the self-draw."],
+  ["Win off the last discard", "1", "Win on the last discard of the game."],
+  ["Robbing a Kong", "1", "Win on the tile a player adds to their revealed pong to make a kong. Doesn't apply to concealed kongs."],
+  ["Out on Replacement Tile", "1", "Win on the tile drawn from the back of the wall after a kong or a flower/season. Stacks with itself."],
+  ["Concealed Hand", "1", "No melds. Winning by self-draw or off a discard are both fine."],
+];
+const ftile = (f) => f === 0 || f === LIMIT_FAN
+  ? `<span class="ftile limit" aria-label="Limit, ${LIMIT_FAN} fan"><b>${LIMIT_FAN}</b><small>Limit</small></span>`
+  : `<span class="ftile" aria-label="${f} fan"><b>${esc(f)}</b><small>fan</small></span>`;
+const ruleRow = (name, f, desc) => `<li>${ftile(f)}<div class="rd"><b>${esc(name)}</b>${desc ? `<span>${esc(desc)}</span>` : ""}</div></li>`;
+
+VIEWS.rules = () => {
+  const rs = S.settings.ruleset, sd = S.settings.selfDraw;
+  const m = (SELF_DRAW[sd] || SELF_DRAW.half).mult;
+  let h = `<div class="stack">`;
+  h += `<section class="card"><h2>How to win</h2>
+    <p>You need at least <b>${MIN_FAN} fan</b> to win. Add up your winning hand and any extra fan. Limit hands, and anything that adds up past the limit, score <b>${LIMIT_FAN} fan</b>.</p>
+    <div class="jump">${[["r-house", "House rules"], ["r-hands", "Winning hands"], ["r-extra", "Extra fan"], ["r-points", "Points"]].map(([id, l]) =>
+      `<button class="chip" data-act="jump" data-to="${id}">${l}</button>`).join("")}</div></section>`;
+
+  h += `<section class="card house" id="r-house"><h2>Rule clarifications</h2>
+    <h3>Kongs</h3>
+    <ul>
+      <li>A kong can be declared at any time.</li>
+      <li><b>Fong rule:</b> each kong, revealed or concealed, is worth 1 fan.
+        <ul>
+          <li>Out on Replacement Tile (second-last row of Extra fan) still applies.</li>
+          <li>Kongs in a row, then drawing the winning tile: <b>+8 fan</b>.</li>
+          <li>Winning on a replacement tile doesn't also earn the Self-Draw fan.</li>
+        </ul>
+      </li>
+    </ul>
+    <p class="note warn small">These kong rules are our own and differ from traditional Hong Kong or Chinese rules.</p>
+    <h3>Steal order</h3>
+    <ul>
+      <li>A pong (triplet) or kong (quad) takes priority over a seung (sequence/chow), unless the seung is for the win.</li>
+      <li>A seung can be taken from anyone if it's for the win.</li>
+    </ul></section>`;
+
+  h += `<section class="card" id="r-hands"><h2>Winning hands</h2><ul class="rules">${WIN_HANDS.map(([n, f, d]) => ruleRow(n, f, d)).join("")}</ul></section>`;
+  h += `<section class="card" id="r-extra"><h2>Extra fan</h2><p class="muted small">Added on top of your winning hand.</p><ul class="rules">${EXTRA_FAN.map(([n, f, d]) => ruleRow(n, f, d)).join("")}</ul></section>`;
+
+  h += `<section class="card" id="r-points"><h2>Points per fan</h2>
+    <p class="muted small">Scored with <b>${esc(RULESETS[rs]?.name)}</b>. The discarder pays the full amount. On a self-draw, ${m === 1 ? "each other player pays the full amount" : "each other player pays half"}.</p>
+    <div class="scroll"><table class="fantable"><thead><tr><th>Fan</th><th>Discarder pays</th><th>Self-draw, each pays</th><th>Self-draw, winner gets</th></tr></thead><tbody>${fanRange().map(f => { const b = basePoints(f, rs);
+      return `<tr><td>${f}${f === LIMIT_FAN ? " (limit)" : ""}</td><td>${num(b)}</td><td>${num(b * m)}</td><td>${num(b * m * 3)}</td></tr>`; }).join("")}</tbody></table></div></section>`;
+  return h + `</div>`;
+};
+
 // ---------- toast & modal ----------
 let toastTimer;
 function toast(msg, err = false, undo = null) {
@@ -835,6 +935,7 @@ async function unseatElsewhere(ids, keepTableIds) {
 const A = {
   tab(d) { ui.tab = d.tab; history.replaceState(null, "", "#" + d.tab); window.scrollTo(0, 0); },
   arm(d) { ui.confirm = d.key; },
+  jump(d) { document.getElementById(d.to)?.scrollIntoView({ behavior: "smooth", block: "start" }); return "keep"; },
   pickTable(d) { if (ui.tableId !== d.id) draftReset(); ui.tableId = d.id; lsSet("fgd-table", d.id); },
   pickWinner(d) { ui.winner = d.id; if (ui.from === d.id) ui.from = null; },
   pickFrom(d) { ui.from = d.id; },
