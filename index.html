@@ -184,12 +184,12 @@ input[type=number]{width:80px}
 .ftile small{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#5a6b63}
 .ftile.limit{background:var(--jade);color:#fff;border-bottom-color:#08402f}
 .ftile.limit small{color:#d8efe6}
-#r-house,#r-hands,#r-extra,#r-points{scroll-margin-top:76px}
+#r-house,#r-hands,#r-extra,#r-points,#r-tiles{scroll-margin-top:76px}
 .house{border-left:4px solid var(--jade)}
 .eg{display:flex;flex-wrap:wrap;gap:6px 8px;margin-top:7px}
 .eg .grp{display:inline-flex;gap:2px}
 .eg .grp.win{padding-left:8px;border-left:2px dashed var(--line);align-items:flex-end}
-.mt{width:22px;height:30px;flex:none;background:var(--tile);color:var(--tile-ink);border:1px solid #c9c4b2;border-bottom:3px solid var(--tile-edge);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;font-family:var(--display)}
+.mt{width:24px;height:33px;flex:none;background:var(--tile);color:var(--tile-ink);border:1px solid #c9c4b2;border-bottom:3px solid var(--tile-edge);border-radius:4px;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;font-family:var(--display)}
 .mt i{font-style:normal;font-size:13px}
 .mt u{text-decoration:none;font-size:9px;margin-top:1px;font-family:var(--body);font-weight:700}
 .mt.m u{color:#b3261e} .mt.p u{color:#1f5fa8} .mt.s u{color:#127a4c}
@@ -198,6 +198,18 @@ input[type=number]{width:80px}
 .mt.wht::after{content:"";width:12px;height:17px;border:2px solid #1f5fa8;border-radius:2px}
 .mt.fl i{font-size:13px;color:#a24a00} .mt.fl u{color:#6b6b6b}
 .mt.lucky{box-shadow:0 0 0 2px var(--jade)}
+.mt svg{width:20px;height:28px;display:block}
+.mt.p,.mt.s{padding:0}
+.tguide{display:flex;flex-direction:column;gap:12px}
+.trow{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:4px;justify-items:center}
+.trow.short{grid-template-columns:repeat(7,minmax(0,1fr))}
+.trow figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}
+.trow figcaption{font-size:11px;line-height:1.15;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
+.trow figcaption b{display:block;color:var(--ink);font-size:12px}
+.numref{width:100%;border-collapse:collapse;font-size:14px}
+.numref td,.numref th{padding:5px 4px;border-bottom:1px solid var(--line);text-align:center}
+.numref th{font-size:12px;color:var(--muted);font-weight:600}
+.numref .zh{font:20px/1 var(--display)}
 .house ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .house ul ul{margin-top:6px}
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:9;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:12px;font-weight:600;max-width:calc(100% - 32px);display:flex;gap:12px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.25)}
@@ -890,10 +902,50 @@ const SUITS = { m: "萬", p: "筒", s: "索" };
 const NUMS = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
 const NAMES = { m: "characters", p: "dots", s: "bamboo" };
 const HNAMES = ["East", "South", "West", "North", "White dragon", "Green dragon", "Red dragon"];
+// Dots and bamboo are drawn as small pictures (20 x 28 grid) in the usual tile layouts
+const TB = "#1f5fa8", TG = "#127a4c", TR = "#c0261c";
+const DOTS = {
+  1: [[10, 14, TG, 7]],
+  2: [[10, 8, TG], [10, 20, TB]],
+  3: [[4.5, 5.5, TB], [10, 14, TR], [15.5, 22.5, TG]],
+  4: [[5.5, 8, TB], [14.5, 8, TG], [5.5, 20, TG], [14.5, 20, TB]],
+  5: [[5, 6, TB], [15, 6, TG], [10, 14, TR], [5, 22, TG], [15, 22, TB]],
+  6: [[5.5, 5, TG], [14.5, 5, TG], [5.5, 14, TR], [14.5, 14, TR], [5.5, 23, TR], [14.5, 23, TR]],
+  7: [[4, 4, TG], [10, 7.5, TG], [16, 11, TG], [6, 17.5, TR], [14, 17.5, TR], [6, 24, TR], [14, 24, TR]],
+  8: [[6, 4, TB], [14, 4, TB], [6, 10.7, TB], [14, 10.7, TB], [6, 17.3, TB], [14, 17.3, TB], [6, 24, TB], [14, 24, TB]],
+  9: [[4.5, 5, TB], [10, 5, TB], [15.5, 5, TB], [4.5, 14, TR], [10, 14, TR], [15.5, 14, TR], [4.5, 23, TG], [10, 23, TG], [15.5, 23, TG]],
+};
+const DOT_R = { 1: 7, 2: 3.8, 3: 3.3, 4: 3.6, 5: 3.1, 6: 3.1, 7: 2.7, 8: 2.8, 9: 2.7 };
+// bamboo sticks: [centre x, centre y, height, colour]
+const STICKS = {
+  1: [[10, 14, 22, TG]],
+  2: [[10, 7.5, 11, TG], [10, 20.5, 11, TB]],
+  3: [[10, 7.5, 11, TB], [6, 20.5, 11, TG], [14, 20.5, 11, TG]],
+  4: [[6, 7.5, 11, TB], [14, 7.5, 11, TG], [6, 20.5, 11, TG], [14, 20.5, 11, TB]],
+  5: [[4.5, 7.5, 11, TG], [15.5, 7.5, 11, TB], [10, 14, 11, TR], [4.5, 20.5, 11, TB], [15.5, 20.5, 11, TG]],
+  6: [[4.5, 7.5, 11, TG], [10, 7.5, 11, TG], [15.5, 7.5, 11, TG], [4.5, 20.5, 11, TB], [10, 20.5, 11, TB], [15.5, 20.5, 11, TB]],
+  7: [[10, 4.5, 7.5, TR], [4.5, 13.7, 7.5, TG], [10, 13.7, 7.5, TB], [15.5, 13.7, 7.5, TG], [4.5, 22.8, 7.5, TG], [10, 22.8, 7.5, TB], [15.5, 22.8, 7.5, TG]],
+  8: [[3, 7.5, 11, TG], [7.7, 7.5, 11, TG], [12.3, 7.5, 11, TG], [17, 7.5, 11, TG], [3, 20.5, 11, TB], [7.7, 20.5, 11, TB], [12.3, 20.5, 11, TB], [17, 20.5, 11, TB]],
+  9: [[4.5, 4.8, 7.8, TG], [10, 4.8, 7.8, TR], [15.5, 4.8, 7.8, TB], [4.5, 14, 7.8, TG], [10, 14, 7.8, TR], [15.5, 14, 7.8, TB], [4.5, 23.2, 7.8, TG], [10, 23.2, 7.8, TR], [15.5, 23.2, 7.8, TB]],
+};
+function dotFace(n) {
+  const r = DOT_R[n];
+  const inner = n === 1 ? `<circle cx="10" cy="14" r="4" fill="none" stroke="${TR}" stroke-width="1.4"/>` : "";
+  return `<svg viewBox="0 0 20 28" aria-hidden="true">${DOTS[n].map(([x, y, c]) =>
+    `<circle cx="${x}" cy="${y}" r="${r - 0.7}" fill="none" stroke="${c}" stroke-width="1.4"/><circle cx="${x}" cy="${y}" r="${n === 1 ? 1.4 : 0.9}" fill="${c}"/>`).join("")}${inner}</svg>`;
+}
+function stickFace(n) {
+  const w = n === 8 ? 2.8 : n === 1 ? 4.4 : 3.3;
+  return `<svg viewBox="0 0 20 28" aria-hidden="true">${STICKS[n].map(([x, y, h, c]) =>
+    `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${w / 2.4}" fill="${c}"/><line x1="${x - w / 2}" x2="${x + w / 2}" y1="${y}" y2="${y}" stroke="#fbfaf3" stroke-width="0.8"/>` +
+    (h > 9 ? `<line x1="${x - w / 2}" x2="${x + w / 2}" y1="${y - h / 4}" y2="${y - h / 4}" stroke="#fbfaf3" stroke-width="0.5"/><line x1="${x - w / 2}" x2="${x + w / 2}" y1="${y + h / 4}" y2="${y + h / 4}" stroke="#fbfaf3" stroke-width="0.5"/>` : "")).join("")}${n === 1 ? `<circle cx="10" cy="3.5" r="2.2" fill="${TR}"/>` : ""}</svg>`;
+}
 function mjTile(d, suit, win) {
   const n = +d, x = win ? " lucky" : "";
   if (suit === "z") { const [c, k] = HONOURS[n - 1]; return `<span class="mt h ${k}${x}" title="${HNAMES[n - 1]}"><i>${c}</i></span>`; }
   if (FLOWERS[suit]) return `<span class="mt fl${x}" title="${suit === "f" ? "Flower" : "Season"} ${n}"><i>${FLOWERS[suit][n - 1]}</i><u>${n}</u></span>`;
+  if (suit === "p") return `<span class="mt p${x}" title="${n} dots">${dotFace(n)}</span>`;
+  if (suit === "s") return `<span class="mt s${x}" title="${n} bamboo">${stickFace(n)}</span>`;
   return `<span class="mt ${suit}${x}" title="${n} ${NAMES[suit]}"><i>${NUMS[n - 1]}</i><u>${SUITS[suit]}</u></span>`;
 }
 function exampleHand(code) {
@@ -908,12 +960,12 @@ const ruleRow = (name, f, desc, eg) => `<li>${ftile(f)}<div class="rd"><b>${esc(
 VIEWS.rules = () => {
   const rs = S.settings.ruleset, sd = S.settings.selfDraw;
   const m = (SELF_DRAW[sd] || SELF_DRAW.half).mult;
-  let h = `<div class="stack"><div class="jump">${[["r-hands", "Winning hands"], ["r-extra", "Extra fan"], ["r-house", "House rules"], ["r-points", "Scoring"]].map(([id, l]) =>
+  let h = `<div class="stack"><div class="jump">${[["r-hands", "Winning hands"], ["r-extra", "Extra fan"], ["r-house", "House rules"], ["r-points", "Scoring"], ["r-tiles", "Tile guide"]].map(([id, l]) =>
       `<button class="chip" data-act="jump" data-to="${id}">${l}</button>`).join("")}</div>`;
 
   h += `<section class="card" id="r-hands"><h2>Winning hands</h2>
     <p>You need at least <b>${MIN_FAN} fan</b> to win. Add up your winning hand and any extra fan. Limit hands, and anything that adds up past the limit, score <b>${LIMIT_FAN} fan</b>.</p>
-    <p class="muted small">Example hands show 萬 characters, 筒 dots, 索 bamboo, winds 東南西北, and dragons: red 中, green 發 and white (blue box). A tile after a dashed line is the winning tile.</p>
+    <p class="muted small">A tile after a dashed line is the winning tile. Not sure which tile is which? See the <button class="btn link" data-act="jump" data-to="r-tiles">Tile guide</button>.</p>
     <ul class="rules">${WIN_HANDS.map(([n, f, d, e]) => ruleRow(n, f, d, e)).join("")}</ul></section>`;
 
   h += `<section class="card" id="r-extra"><h2>Extra fan</h2><p class="muted small">Added on top of your winning hand.</p><ul class="rules">${EXTRA_FAN.map(([n, f, d]) => ruleRow(n, f, d)).join("")}</ul></section>`;
@@ -945,6 +997,23 @@ VIEWS.rules = () => {
   h += `<p class="muted small">The discarder pays the full amount. On a self-draw, ${m === 1 ? "each other player pays the full amount" : "each other player pays half"}.</p>
     <div class="scroll"><table class="fantable"><thead><tr><th>Fan</th><th>Discarder pays</th><th>Self-draw, each pays</th><th>Self-draw, winner gets</th></tr></thead><tbody>${fanRange().map(f => { const b = basePoints(f, rs);
       return `<tr><td>${f}${f === LIMIT_FAN ? " (limit)" : ""}</td><td>${num(b)}</td><td>${num(b * m)}</td><td>${num(b * m * 3)}</td></tr>`; }).join("")}</tbody></table></div></section>`;
+  const fig = (tile, cap) => `<figure>${tile}<figcaption>${cap}</figcaption></figure>`;
+  const CANTO = ["yat", "yi", "saam", "sei", "ng", "luk", "chat", "baat", "gau"];
+  h += `<section class="card" id="r-tiles"><h2>Tile guide</h2><div class="tguide">
+    <div><h3>Characters 萬 (man)</h3><p class="muted small">The top of each tile is a Chinese number from 1 to 9.</p></div>
+    <div class="trow">${NUMS.map((_, i) => fig(mjTile(i + 1, "m"), `<b>${i + 1}</b>`)).join("")}</div>
+    <table class="numref"><thead><tr><th>Number</th><th>Chinese</th><th>Cantonese</th></tr></thead><tbody>${NUMS.map((c, i) =>
+      `<tr><td>${i + 1}</td><td class="zh">${c}</td><td>${CANTO[i]}</td></tr>`).join("")}<tr><td>10,000</td><td class="zh">萬</td><td>maan</td></tr></tbody></table>
+    <h3>Dots 筒 (tung)</h3>
+    <div class="trow">${NUMS.map((_, i) => fig(mjTile(i + 1, "p"), `<b>${i + 1}</b>`)).join("")}</div>
+    <h3>Bamboo 索 (sok)</h3>
+    <div class="trow">${NUMS.map((_, i) => fig(mjTile(i + 1, "s"), `<b>${i + 1}</b>`)).join("")}</div>
+    <h3>Winds and dragons</h3>
+    <div class="trow short">${HNAMES.map((nm, i) => fig(mjTile(i + 1, "z"), nm.replace(" dragon", ""))).join("")}</div>
+    <h3>Flowers (left) and seasons (right)</h3>
+    <div class="trow">${[1, 2, 3, 4].map(n => fig(mjTile(n, "f"), WINDS[n - 1])).join("")}<span></span>${[1, 2, 3, 4].map(n => fig(mjTile(n, "q"), WINDS[n - 1])).join("")}</div>
+    <p class="muted small">Each flower and season belongs to the seat wind shown under it.</p>
+  </div></section>`;
   return h + `</div>`;
 };
 
