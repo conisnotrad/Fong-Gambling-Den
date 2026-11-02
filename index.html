@@ -206,10 +206,6 @@ input[type=number]{width:80px}
 .trow figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}
 .trow figcaption{font-size:11px;line-height:1.15;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
 .trow figcaption b{display:block;color:var(--ink);font-size:12px}
-.numref{width:100%;border-collapse:collapse;font-size:14px}
-.numref td,.numref th{padding:5px 4px;border-bottom:1px solid var(--line);text-align:center}
-.numref th{font-size:12px;color:var(--muted);font-weight:600}
-.numref .zh{font:20px/1 var(--display)}
 .house ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .house ul ul{margin-top:6px}
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:9;background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:12px;font-weight:600;max-width:calc(100% - 32px);display:flex;gap:12px;align-items:center;box-shadow:0 6px 24px rgba(0,0,0,.25)}
@@ -336,9 +332,72 @@ function snakeSeat(rankedIds, nTables) {
   return tables;
 }
 
+// ---------- Glicko ratings (the Elo tab) ----------
+// Rebuilt from scratch from the full hand history every time anything changes, so edits and deletes are always reflected.
+// Each hand is one rating period. Weight = sqrt(pays / 4), using the UTS 10x table whatever ruleset is picked.
+const ELO = { start: 1500, rdMax: 350, rdNight: 25, minHands: 25, rdRanked: 100, rdSuggest: 175, inactiveNights: 6 };
+const ELO_Q = Math.log(10) / 400;
+const eloG = rd => 1 / Math.sqrt(1 + 3 * ELO_Q * ELO_Q * rd * rd / (Math.PI * Math.PI));
+const eloE = (r, rj, rdj) => 1 / (1 + Math.pow(10, -eloG(rdj) * (r - rj) / 400));
+function eloMatchups(h) {
+  if (h.draw || !h.winner) return [];
+  const w = Math.sqrt(basePoints(h.fan, "uts10") / 4);
+  if (h.selfDraw) return (h.seats || []).filter(p => p !== h.winner).map(l => [h.winner, l, w / 2]);
+  return h.discarder ? [[h.winner, h.discarder, w]] : [];
+}
+let _elo = null;
+function eloState() {
+  if (_elo) return _elo;
+  const st = {}, nightKeys = [];
+  const get = id => st[id] || (st[id] = { id, r: ELO.start, rd: ELO.rdMax, n: 0, w: 0, l: 0, ranked: false, how: "", manual: false, afterDem: false, lastNight: -1, r0: ELO.start, peak: ELO.start });
+  const demAt = id => S.players[id]?.demotedAt || 0;
+  for (const h of allHands()) {
+    const nk = h.night || h.date;
+    if (nightKeys[nightKeys.length - 1] !== nk) { // a new night: everyone's uncertainty grows a little
+      nightKeys.push(nk);
+      for (const id in st) { const x = st[id]; x.rd = Math.min(ELO.rdMax, Math.sqrt(x.rd * x.rd + ELO.rdNight * ELO.rdNight)); x.r0 = x.r; }
+    }
+    const seats = h.seats || [];
+    seats.forEach(id => { const x = get(id); x.n++; x.lastNight = nightKeys.length - 1; });
+    // every update uses the ratings from before this hand, then all are applied together
+    const acc = {};
+    for (const [a, b, w] of eloMatchups(h)) for (const [me, op, sc] of [[a, b, 1], [b, a, 0]]) {
+      const M = get(me), O = get(op), y = acc[me] || (acc[me] = { d: 0, s: 0 });
+      const g = eloG(O.rd), E = eloE(M.r, O.r, O.rd);
+      y.d += w * g * g * E * (1 - E); y.s += w * g * (sc - E);
+      if (sc) M.w += 1 / (h.selfDraw ? 3 : 1); else M.l++;
+    }
+    const upd = {};
+    for (const id in acc) { const M = st[id], den = 1 / (M.rd * M.rd) + ELO_Q * ELO_Q * acc[id].d; upd[id] = { r: M.r + (ELO_Q / den) * acc[id].s, rd: Math.sqrt(1 / den) }; }
+    for (const id in upd) { Object.assign(st[id], upd[id]); st[id].peak = Math.max(st[id].peak, st[id].r); }
+    // ranked status: promoted automatically, never demoted automatically
+    for (const id of seats) {
+      const x = st[id], dem = demAt(id);
+      if (dem && h.ts > dem) {
+        if (!x.afterDem) { x.afterDem = true; x.ranked = false; x.manual = true; }
+        if (!x.ranked && x.rd <= ELO.rdRanked) { x.ranked = true; x.manual = false; x.how = "variance"; }
+      } else if (!x.ranked && (x.n >= ELO.minHands || x.rd <= ELO.rdRanked)) { x.ranked = true; x.how = x.n >= ELO.minHands ? "hands" : "variance"; }
+    }
+  }
+  const last = nightKeys.length - 1;
+  for (const id in st) {
+    const x = st[id];
+    if (demAt(id) && !x.afterDem) { x.ranked = false; x.manual = true; } // made provisional, no hands since
+    x.missed = last - x.lastNight;
+    x.inactive = x.ranked && x.missed >= ELO.inactiveNights;
+    x.delta = x.lastNight === last ? x.r - x.r0 : 0;
+  }
+  _elo = { st, lastNight: nightKeys[last] || null };
+  return _elo;
+}
+const eloOf = id => eloState().st[id];
+const isRanked = id => !!eloOf(id)?.ranked;
+// Ranked players the admin may want to make provisional: missed 6+ nights in a row, or rating has grown very uncertain (RD above 175, i.e. ±350)
+const unrankSuggestions = () => Object.values(eloState().st).filter(x => x.ranked && S.players[x.id] && (x.missed >= ELO.inactiveNights || x.rd > ELO.rdSuggest)).sort((a, b) => b.missed - a.missed || b.rd - a.rd);
+
 // ---------- state ----------
 const S = { ready: false, user: null, isAdmin: false, players: {}, tables: {}, nights: {}, settings: { ruleset: "uts10", selfDraw: "half" }, tournaments: {} };
-const ui = { tab: "record", tableId: lsGet("fgd-table"), winner: null, from: null, fan: null, scope: "today", date: null, histOpen: {}, histLimit: 15, confirm: null, tView: null, newT: false, d: {}, sort: "pts", sortDir: -1, pOpen: {}, tStat: "all" };
+const ui = { tab: "record", tableId: lsGet("fgd-table"), winner: null, from: null, fan: null, scope: "today", date: null, histOpen: {}, histLimit: 15, confirm: null, tView: null, newT: false, d: {}, sort: "pts", sortDir: -1, pOpen: {}, tStat: "all", showProv: lsGet("fgd-prov") === "1", eloAdv: lsGet("fgd-eloadv") === "1" };
 const validTabs = ["record", "tables", "scores", "hands", "history", "thistory", "tourney", "rules", "settings"];
 if (validTabs.includes(location.hash.slice(1))) ui.tab = location.hash.slice(1);
 
@@ -481,9 +540,9 @@ let store;
 // ---------- rendering ----------
 const app = document.getElementById("app");
 let rq = false;
-function scheduleRender() { _hands = null; if (rq) return; rq = true; requestAnimationFrame(() => { rq = false; render(); }); }
+function scheduleRender() { _hands = null; _elo = null; if (rq) return; rq = true; requestAnimationFrame(() => { rq = false; render(); }); }
 function render() {
-  _hands = null;
+  _hands = null; _elo = null;
   const a = document.activeElement, aid = a && a.id, caret = a && "selectionStart" in a ? a.selectionStart : null;
   document.getElementById("status").outerHTML = statusPill();
   renderTabs();
@@ -619,6 +678,14 @@ function statGrid(s) {
   return `<div class="sgrid">${cell("wins", s.wins, "Wins")}${cell("selfDraws", s.selfDraws, "Self-draw")}${cell("dealIns", s.dealIns, "Discards")}${cell("played", s.played, "Hands")}
     ${cell("bestFan", s.bestFan || "–", "Best fan")}${cell("fanTotal", s.fanTotal, "Total fan")}${cell("won", "+" + num(s.won), "Won", "pos")}${cell("paid", "−" + num(s.paid), "Paid", "neg")}</div>`;
 }
+// Scores boards show ranked players only, unless the viewer turns provisional players on
+function provFilter(list) { return ui.showProv ? list : list.filter(s => isRanked(s.id)); }
+const provToggle = (list) => {
+  const n = list.filter(s => !isRanked(s.id)).length;
+  return n ? `<button class="chip ${ui.showProv ? "on" : ""}" data-act="toggleProv" aria-pressed="${ui.showProv}">${ui.showProv ? "Hide" : "Show"} provisional<span class="cnt">${n}</span></button>` : "";
+};
+const provEmpty = () => `<p class="muted">No ranked players here yet. Tap <b>Show provisional</b> to see everyone.</p>`;
+const provBadge = id => isRanked(id) ? "" : ` <span class="badge warn" title="Provisional: not ranked yet">prov</span>`;
 function boardRows(list, opts = {}) {
   return `<ul class="board">${list.map((s, i) => {
     const tieUp = opts.tie && i > 0 && sameMetrics(list[i - 1], s);
@@ -631,11 +698,37 @@ function boardRows(list, opts = {}) {
     const key = opts.full + ":" + s.id, open = !!ui.pOpen[key], [sk, , get, lab] = sortDef();
     const big = sk === "pts" ? `<span class="pts ${cls(s.pts)}">${fmt(s.pts)}</span>`
       : `<span class="pts ${sk === "won" ? "pos" : sk === "paid" ? "neg" : ""}">${sk === "won" ? "+" : sk === "paid" ? "−" : ""}${num(get(s))}<small>${lab}</small></span>`;
-    return `<li class="tap" data-act="pOpen" data-key="${esc(key)}" role="button" tabindex="0" aria-expanded="${open}"><span class="rk">${i + 1}</span><span class="nm">${esc(pname(s.id))}</span>${big}${open ? statGrid(s)
+    return `<li class="tap" data-act="pOpen" data-key="${esc(key)}" role="button" tabindex="0" aria-expanded="${open}"><span class="rk">${i + 1}</span><span class="nm">${esc(pname(s.id))}${provBadge(s.id)}</span>${big}${open ? statGrid(s)
       : `<span class="meta">${meta} · <span class="pos">+${num(s.won)}</span> / <span class="neg">−${num(s.paid)}</span>${sk !== "pts" ? ` · net <span class="${cls(s.pts)}">${fmt(s.pts)}</span>` : ""}</span>`}</li>`;
   }).join("")}</ul>`;
 }
 const rulesNote = () => `<p class="muted small">Scored with ${esc(RULESETS[S.settings.ruleset]?.name)}; self-draw: ${esc((SELF_DRAW[S.settings.selfDraw] || SELF_DRAW.half).name.toLowerCase())}.</p>`;
+
+function eloView() {
+  const { st, lastNight } = eloState();
+  const all = Object.values(st).filter(x => S.players[x.id]);
+  if (!all.length) return `<section class="card empty"><h2>Ratings</h2><p class="muted">Ratings appear once hands are recorded.</p></section>`;
+  const ranked = all.filter(x => x.ranked && !x.inactive).sort((a, b) => b.r - a.r);
+  const prov = all.filter(x => !x.ranked).sort((a, b) => b.r - a.r);
+  const inactive = all.filter(x => x.inactive).length;
+  const when = curNight()?.id === lastNight ? "tonight" : "last night";
+  const dl = x => x.delta && Math.abs(x.delta) >= 0.5 ? ` · <span class="${x.delta > 0 ? "pos" : "neg"}">${x.delta > 0 ? "+" : "−"}${Math.round(Math.abs(x.delta))} ${when}</span>` : "";
+  const grid = x => `<div class="sgrid"><div><b>${Math.round(x.r)}</b><span>Rating</span></div><div><b>${Math.round(x.rd)}</b><span>RD</span></div><div><b>±${Math.round(2 * x.rd)}</b><span>Margin</span></div><div><b>${x.n}</b><span>Hands</span></div>
+    <div><b>${Math.round(x.peak)}</b><span>Peak</span></div><div><b>${num(x.w)}</b><span>Wins</span></div><div><b>${x.l}</b><span>Losses</span></div><div><b>${x.missed}</b><span>Nights out</span></div></div>`;
+  const row = (x, i) => {
+    const provTxt = x.manual ? (x.rd <= ELO.rdRanked ? "back to ranked after their next hand" : `needs RD ${ELO.rdRanked} (now ${Math.round(x.rd)})`) : `${Math.min(x.n, ELO.minHands)}/${ELO.minHands} hands`;
+    const meta = x.ranked ? `${x.n} hand${x.n === 1 ? "" : "s"}${ui.eloAdv ? "" : ` · ±${Math.round(2 * x.rd)}`}${dl(x)}` : `${provTxt}${dl(x)}`;
+    return `<li><span class="rk">${x.ranked ? i + 1 : "–"}</span><span class="nm">${esc(pname(x.id))}${x.manual ? ` <span class="badge warn">set by admin</span>` : ""}</span><span class="pts num">${Math.round(x.r)}${x.ranked ? "" : "?"}</span>${ui.eloAdv ? grid(x) : ""}<span class="meta">${meta}</span></li>`;
+  };
+  let h = `<section class="card"><div class="row between"><h2>Ratings</h2><span class="muted small num">${ranked.length} ranked</span></div>
+    <div class="chips">${prov.length ? `<button class="chip ${ui.showProv ? "on" : ""}" data-act="toggleProv" aria-pressed="${ui.showProv}">${ui.showProv ? "Hide" : "Show"} provisional<span class="cnt">${prov.length}</span></button>` : ""}<button class="chip ${ui.eloAdv ? "on" : ""}" data-act="toggleEloAdv" aria-pressed="${ui.eloAdv}">Advanced stats</button></div>`;
+  h += ranked.length ? `<ul class="board">${ranked.map(row).join("")}</ul>` : `<p class="muted">No ranked players yet.${prov.length && !ui.showProv ? " Tap <b>Show provisional</b> to see everyone." : ""}</p>`;
+  if (ui.showProv && prov.length) h += `<h3>Provisional</h3><ul class="board">${prov.map(row).join("")}</ul>`;
+  if (inactive) h += `<p class="muted small">${inactive} ranked player${inactive === 1 ? " is" : "s are"} hidden after missing ${ELO.inactiveNights}+ nights in a row. They come back as soon as they play.</p>`;
+  if (ui.eloAdv) h += `<p class="muted small"><b>RD</b> (rating deviation) is how uncertain a rating is: lower means more settled. It shrinks as you play and grows a little each night you miss. Margin is ±2 × RD.</p>`;
+  h += `<p class="muted small">Glicko ratings, updated after every hand. Everyone starts at ${ELO.start}. Bigger hands move ratings more. A player becomes ranked after ${ELO.minHands} hands or once their RD drops to ${ELO.rdRanked}.</p></section>`;
+  return h;
+}
 
 VIEWS.scores = () => {
   const hands = allHands();
@@ -643,8 +736,7 @@ VIEWS.scores = () => {
   let h = `<div class="stack"><div class="seg" role="tablist">${[["today", "Tonight"], ["night", "Night"], ["all", "All-time"], ["tourney", "Tourneys"], ["elo", "Elo"]].map(([k, l]) =>
     `<button class="${ui.scope === k ? "on" : ""}" data-act="scope" data-scope="${k}">${l}</button>`).join("")}</div>`;
   if (ui.scope === "tourney") return h + tourneyHistory() + `</div>`;
-  if (ui.scope === "elo") return h + `<section class="card empty"><h2>Elo ratings</h2><span class="badge warn">To be created</span>
-    <p class="muted">Player ratings are coming in a later update. Every hand recorded from day one keeps the seats, winner and discarder, so the ratings will cover your full history once they're added.</p></section></div>`;
+  if (ui.scope === "elo") return h + eloView() + `</div>`;
   let sel, title;
   if (ui.scope === "night") {
     if (!dates.length) return h + `<section class="card empty"><h2>No game nights yet</h2><p class="muted">Nights appear here once the first hand is recorded.</p></section></div>`;
@@ -659,8 +751,9 @@ VIEWS.scores = () => {
   }
   const list = rankList(statsFor(sel, S.settings)).filter(s => s.played > 0);
   h += `<section class="card"><div class="row between"><h2>${title}</h2><span class="muted small num">${sel.length} hand${sel.length === 1 ? "" : "s"}</span></div>`;
-  if (list.length) h += sortBar();
-  h += list.length ? boardRows(sortStats(list), { nights: ui.scope === "all", full: ui.scope }) + `<p class="muted small">Tap a player for their full stats.</p>` : `<p class="muted">No hands recorded ${ui.scope === "today" ? (curNight() ? "tonight yet" : "yet. The admin begins each game night") : "here"}.</p>`;
+  const shown = provFilter(list);
+  if (list.length) h += sortBar() + (provToggle(list) ? `<div class="chips">${provToggle(list)}</div>` : "");
+  h += shown.length ? boardRows(sortStats(shown), { nights: ui.scope === "all", full: ui.scope }) + `<p class="muted small">Tap a player for their full stats.</p>` : list.length ? provEmpty() : `<p class="muted">No hands recorded ${ui.scope === "today" ? (curNight() ? "tonight yet" : "yet. The admin begins each game night") : "here"}.</p>`;
   h += rulesNote() + `</section></div>`;
   return h;
 };
@@ -682,7 +775,9 @@ function tourneyHistory() {
     <select id="tStatPick" data-change="tStat" aria-label="Which tournament">${[["all", "All tournaments"], ...all.map(T => [T.id, `${T.name} · ${niceDate(T.date)}`])].map(([k, l]) =>
       `<option value="${esc(k)}" ${k === ui.tStat ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
     <p class="muted small">Counts tournament hands only${ui.tStat === "all" ? "" : ", qualifying and final together"}.</p>`;
-  h += tlist.length ? sortBar() + boardRows(sortStats(tlist), { full: "t-" + ui.tStat }) + `<p class="muted small">Tap a player for their full stats.</p>` : `<p class="muted">No tournament hands recorded yet.</p>`;
+  const tshown = provFilter(tlist);
+  h += !tlist.length ? `<p class="muted">No tournament hands recorded yet.</p>`
+    : sortBar() + (provToggle(tlist) ? `<div class="chips">${provToggle(tlist)}</div>` : "") + (tshown.length ? boardRows(sortStats(tshown), { full: "t-" + ui.tStat }) + `<p class="muted small">Tap a player for their full stats.</p>` : provEmpty());
   h += `</section>`;
   for (const T of all) {
     const open = ui.tOpen?.[T.id] ?? false;
@@ -840,6 +935,19 @@ VIEWS.settings = () => {
   } else h += ps.length ? `<p>${ps.filter(p => p.active !== false).map(p => esc(p.name)).join(" · ")}</p><p class="muted small">Only the admin can add or rename players.</p>` : `<p class="muted">No players yet. The admin adds them here.</p>`;
   h += `</section>`;
 
+  if (S.isAdmin) {
+    const { st } = eloState(), sug = unrankSuggestions();
+    const manual = Object.values(st).filter(x => x.manual && S.players[x.id]);
+    const rankedIds = Object.values(st).filter(x => x.ranked && S.players[x.id]).sort((a, b) => pname(a.id).localeCompare(pname(b.id)));
+    h += `<section class="card"><h2>Rating status</h2>
+      <p class="muted small">Players become ranked automatically after ${ELO.minHands} hands or once their RD drops to ${ELO.rdRanked}. Nobody is made provisional automatically. A player you make provisional goes back to ranked by themselves once their RD is back to ${ELO.rdRanked} or lower after a hand.</p>
+      <h3>Suggested to unrank</h3>`;
+    h += sug.length ? `<ul class="seats">${sug.map(x => `<li><span class="grow">${esc(pname(x.id))}<br><span class="muted small">RD ${Math.round(x.rd)} · missed ${x.missed} night${x.missed === 1 ? "" : "s"} in a row</span></span>${confirmBtn("dem-" + x.id, "Make provisional", "Tap to confirm", "demote", `data-id="${x.id}"`, "btn link")}</li>`).join("")}</ul>`
+      : `<p class="muted small">None right now. Ranked players show up here after missing ${ELO.inactiveNights} or more nights in a row, or if their RD climbs above ${ELO.rdSuggest}.</p>`;
+    if (manual.length) h += `<h3>Made provisional by you</h3><ul class="seats">${manual.map(x => `<li><span class="grow">${esc(pname(x.id))}<br><span class="muted small">RD ${Math.round(x.rd)}${x.rd <= ELO.rdRanked ? " · back to ranked after their next hand" : `, needs ${ELO.rdRanked}`}</span></span><button class="btn link" data-act="undemote" data-id="${x.id}">Undo</button></li>`).join("")}</ul>`;
+    if (rankedIds.length) h += `<h3>Make any ranked player provisional</h3><div class="inline"><select id="demPick" data-model="demPick" aria-label="Ranked player">${rankedIds.map(x => `<option value="${x.id}" ${ui.d.demPick === x.id ? "selected" : ""}>${esc(pname(x.id))} · RD ${Math.round(x.rd)}</option>`).join("")}</select><button class="btn ghost" data-act="demote" data-pick="1">Make provisional</button></div>`;
+    h += `</section>`;
+  }
   h += `<section class="card"><h2>Backup</h2><p class="muted">Download every player, hand and tournament as a file. Keep a copy now and then.</p><div><button class="btn ghost" data-act="backup">Download backup</button></div></section>`;
 
   h += `<section class="card"><h2>Admin</h2>`;
@@ -934,7 +1042,22 @@ function dotFace(n) {
   return `<svg viewBox="0 0 20 28" aria-hidden="true">${DOTS[n].map(([x, y, c]) =>
     `<circle cx="${x}" cy="${y}" r="${r - 0.7}" fill="none" stroke="${c}" stroke-width="1.4"/><circle cx="${x}" cy="${y}" r="${n === 1 ? 1.4 : 0.9}" fill="${c}"/>`).join("")}${inner}</svg>`;
 }
+// 1 bamboo is a bird on a real set (often called the sparrow), not a single stick
+const BIRD_1S = `<svg viewBox="0 0 20 28" aria-hidden="true">
+  <path d="M7.5 16.5 Q2.5 19 1.2 26 Q4.8 22.6 8.8 18.6Z" fill="${TG}"/>
+  <path d="M8.2 17.2 Q5 21.5 5.2 27 Q7.4 22.6 9.8 18.8Z" fill="${TB}"/>
+  <path d="M6.8 15.6 Q1.6 16.4 .6 21.4 Q4 18.6 8 17.6Z" fill="${TR}"/>
+  <ellipse cx="11.4" cy="15.2" rx="5" ry="4.1" transform="rotate(-24 11.4 15.2)" fill="${TG}"/>
+  <path d="M8.6 14.6 Q11.6 11.4 15.4 13.2 Q13 17.6 8.8 16.8Z" fill="${TB}"/>
+  <path d="M12.6 12.4 Q13.6 9.6 15 8.4 L16.8 10.6 Q15.6 12 14.6 13.4Z" fill="${TG}"/>
+  <circle cx="15.6" cy="8.2" r="2.7" fill="${TR}"/>
+  <path d="M14.2 5.9 L13.4 3.4 L15.2 5.4 L15.6 2.8 L16.3 5.4 L17.6 3.8 L17 6.2Z" fill="${TR}"/>
+  <path d="M18.1 7.5 L20 8.4 L18.1 9.3Z" fill="#d98a1a"/>
+  <circle cx="16.4" cy="7.7" r=".85" fill="#fbfaf3"/><circle cx="16.6" cy="7.7" r=".4" fill="#14201b"/>
+  <path d="M10.6 18.8 L9.6 24.4 M12.8 18.6 L13.4 24.4 M8.3 24.6 H10.8 M12.3 24.6 H14.8" stroke="#8a4b14" stroke-width=".8" stroke-linecap="round" fill="none"/>
+</svg>`;
 function stickFace(n) {
+  if (n === 1) return BIRD_1S;
   const w = n === 8 ? 2.8 : n === 1 ? 4.4 : 3.3;
   return `<svg viewBox="0 0 20 28" aria-hidden="true">${STICKS[n].map(([x, y, h, c]) =>
     `<rect x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${w / 2.4}" fill="${c}"/><line x1="${x - w / 2}" x2="${x + w / 2}" y1="${y}" y2="${y}" stroke="#fbfaf3" stroke-width="0.8"/>` +
@@ -998,15 +1121,12 @@ VIEWS.rules = () => {
     <div class="scroll"><table class="fantable"><thead><tr><th>Fan</th><th>Discarder pays</th><th>Self-draw, each pays</th><th>Self-draw, winner gets</th></tr></thead><tbody>${fanRange().map(f => { const b = basePoints(f, rs);
       return `<tr><td>${f}${f === LIMIT_FAN ? " (limit)" : ""}</td><td>${num(b)}</td><td>${num(b * m)}</td><td>${num(b * m * 3)}</td></tr>`; }).join("")}</tbody></table></div></section>`;
   const fig = (tile, cap) => `<figure>${tile}<figcaption>${cap}</figcaption></figure>`;
-  const CANTO = ["yat", "yi", "saam", "sei", "ng", "luk", "chat", "baat", "gau"];
   h += `<section class="card" id="r-tiles"><h2>Tile guide</h2><div class="tguide">
-    <div><h3>Characters 萬 (man)</h3><p class="muted small">The top of each tile is a Chinese number from 1 to 9.</p></div>
+    <div><h3>Characters 萬</h3><p class="muted small">The top of each tile is a Chinese number from 1 to 9.</p></div>
     <div class="trow">${NUMS.map((_, i) => fig(mjTile(i + 1, "m"), `<b>${i + 1}</b>`)).join("")}</div>
-    <table class="numref"><thead><tr><th>Number</th><th>Chinese</th><th>Cantonese</th></tr></thead><tbody>${NUMS.map((c, i) =>
-      `<tr><td>${i + 1}</td><td class="zh">${c}</td><td>${CANTO[i]}</td></tr>`).join("")}<tr><td>10,000</td><td class="zh">萬</td><td>maan</td></tr></tbody></table>
-    <h3>Dots 筒 (tung)</h3>
+    <h3>Dots 筒</h3>
     <div class="trow">${NUMS.map((_, i) => fig(mjTile(i + 1, "p"), `<b>${i + 1}</b>`)).join("")}</div>
-    <h3>Bamboo 索 (sok)</h3>
+    <h3>Bamboo 索</h3>
     <div class="trow">${NUMS.map((_, i) => fig(mjTile(i + 1, "s"), `<b>${i + 1}</b>`)).join("")}</div>
     <h3>Winds and dragons</h3>
     <div class="trow short">${HNAMES.map((nm, i) => fig(mjTile(i + 1, "z"), nm.replace(" dragon", ""))).join("")}</div>
@@ -1114,6 +1234,15 @@ const A = {
   scope(d) { ui.scope = d.scope; },
   pOpen(d) { ui.pOpen[d.key] = !ui.pOpen[d.key]; },
   sortDir() { ui.sortDir = -ui.sortDir; },
+  toggleProv() { ui.showProv = !ui.showProv; lsSet("fgd-prov", ui.showProv ? "1" : "0"); },
+  toggleEloAdv() { ui.eloAdv = !ui.eloAdv; lsSet("fgd-eloadv", ui.eloAdv ? "1" : "0"); },
+  async demote(d) {
+    const id = d.pick ? (document.getElementById("demPick")?.value || "") : d.id;
+    if (!id || !S.players[id]) return;
+    if (!d.pick && !d.confirmed) return;
+    await run(store.updatePlayer(id, { demotedAt: Date.now() }), `${pname(id)} is now provisional`);
+  },
+  async undemote(d) { await run(store.updatePlayer(d.id, { demotedAt: null }), `${pname(d.id)} restored`); },
   toggleNight(d) { ui.histOpen[d.d] = !(ui.histOpen[d.d] ?? d.d === curNight()?.id); },
   async beginNight() { await run(ensureNight(), "Game night started"); },
   async endNight() {
